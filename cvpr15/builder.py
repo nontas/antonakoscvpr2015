@@ -8,7 +8,7 @@ from menpo.fitmultilevel.builder import (DeformableModelBuilder,
                                          build_shape_model)
 from menpo.fitmultilevel import checks
 from menpo.visualize import print_dynamic, progress_bar_str
-from menpo.feature import igo, gaussian_filter
+from menpo.feature import igo, gaussian_filter, hog
 
 from menpo.fitmultilevel.functions import extract_local_patches_fast
 from menpo.image import Image
@@ -18,13 +18,12 @@ from menpo.image import Image
 
 
 class APSBuilder(DeformableModelBuilder):
-    def __init__(self, features='hog', patch_shape=(16, 16),
+    def __init__(self, features=hog, patch_shape=(16, 16),
                  normalize_parts=False, normalization_diagonal=None, sigma=None,
                  scales=(1., 0.5), scale_shapes=True, scale_features=True,
-                 max_shape_components=None, boundary=3):
+                 max_shape_components=None):
         # check parameters
         checks.check_normalization_diagonal(normalization_diagonal)
-        checks.check_boundary(boundary)
         n_levels = len(scales)
         max_shape_components = checks.check_max_components(
             max_shape_components, n_levels, 'max_shape_components')
@@ -40,7 +39,6 @@ class APSBuilder(DeformableModelBuilder):
         self.scale_shapes = scale_shapes
         self.scale_features = scale_features
         self.max_shape_components = max_shape_components
-        self.boundary = boundary
 
     def build(self, images, group=None, label=None, verbose=False):
         r"""
@@ -127,16 +125,15 @@ class APSBuilder(DeformableModelBuilder):
         shape_models.reverse()
         n_training_images = len(images)
 
-        return self._build_aam(shape_models, n_training_images)
+        return self._build_aps(shape_models, n_training_images)
 
-    def _build_aam(self, shape_models, n_training_images):
+    def _build_aps(self, shape_models, n_training_images):
         r"""
         """
-        pass
-        #from .base import AAM
-        #return AAM(shape_models, appearance_models, n_training_images,
-        #           self.transform, self.features, self.reference_shape,
-        #           self.downscale, self.scaled_shape_models)
+        from .base import APS
+        return APS(shape_models, n_training_images, self.reference_shape,
+                   self.patch_shape, self.features, self.sigma, self.scales,
+                   self.scale_shapes, self.scale_features)
 
 
 def _compute_reference_shape(images, group, label, normalization_diagonal,
