@@ -8,11 +8,12 @@ from menpo.fitmultilevel.base import DeformableModel
 class APS(DeformableModel, HDF5able):
     """
     """
-    def __init__(self, shape_models, n_training_images, reference_shape,
-                 patch_shape, features, sigma, scales, scale_shapes,
-                 scale_features):
+    def __init__(self, shape_models, appearance_models, n_training_images,
+                 reference_shape, patch_shape, features, sigma, scales,
+                 scale_shapes, scale_features):
         DeformableModel.__init__(self, features)
         self.shape_models = shape_models
+        self.appearance_models = appearance_models
         self.n_training_images = n_training_images
         self.patch_shape = patch_shape
         self.features = features

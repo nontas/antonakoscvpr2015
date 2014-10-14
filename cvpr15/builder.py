@@ -13,15 +13,12 @@ from menpo.feature import igo, gaussian_filter, hog
 from menpo.fitmultilevel.functions import extract_local_patches_fast
 from menpo.image import Image
 
-#from cvpr15.cython.extract_patches import extract_patches_cython
-#from .image import Image, MaskedImage
-
 
 class APSBuilder(DeformableModelBuilder):
     def __init__(self, features=hog, patch_shape=(16, 16),
-                 normalize_parts=False, normalization_diagonal=None, sigma=None,
-                 scales=(1., 0.5), scale_shapes=True, scale_features=True,
-                 max_shape_components=None):
+                 normalize_patches=False, normalization_diagonal=None,
+                 sigma=None, scales=(1., 0.5), scale_shapes=True,
+                 scale_features=True, max_shape_components=None):
         # check parameters
         checks.check_normalization_diagonal(normalization_diagonal)
         n_levels = len(scales)
@@ -32,7 +29,7 @@ class APSBuilder(DeformableModelBuilder):
         # store parameters
         self.features = features
         self.patch_shape = patch_shape
-        self.normalize_parts = normalize_parts
+        self.normalize_patches = normalize_patches
         self.normalization_diagonal = normalization_diagonal
         self.sigma = sigma
         self.scales = list(scales)
@@ -61,6 +58,8 @@ class APSBuilder(DeformableModelBuilder):
                 print_dynamic('- Building model\n')
 
         shape_models = []
+        appearance_models = []
+        deformation_models = []
         # for each pyramid level (high --> low)
         for j, s in enumerate(self.scales):
             rj = len(self.scales) - j - 1
@@ -74,8 +73,8 @@ class APSBuilder(DeformableModelBuilder):
             if j == 0:
                 # compute features at highest level
                 scaled_images = _scale_images(images, s, level_str, verbose)
-                feature_images = _compute_features(scaled_images, level_str,
-                                                   self.features, verbose)
+                feature_images = _compute_features(scaled_images, self.features,
+                                                   level_str, verbose)
                 level_images = feature_images
             elif self.scale_features:
                 # scale features at other levels
@@ -84,8 +83,8 @@ class APSBuilder(DeformableModelBuilder):
             else:
                 # scale images and compute features at other levels
                 scaled_images = _scale_images(images, s, level_str, verbose)
-                level_images = _compute_features(scaled_images, level_str,
-                                                 self.features, verbose)
+                level_images = _compute_features(scaled_images, self.features,
+                                                 level_str, verbose)
 
             # obtain shapes of current level
             if self.scale_shapes:
@@ -106,16 +105,41 @@ class APSBuilder(DeformableModelBuilder):
                 # copy precious shape model and add it to the list
                 shape_models.append(deepcopy(shape_model))
 
-            # obtain warped images
+            # extract patches from all images
             level_images_shapes = [i.landmarks[group][label]
                                    for i in level_images]
             warped_images = _warp_images(level_images, level_images_shapes,
-                                         self.patch_shape, self.normalize_parts,
-                                         level_str, verbose)
+                                         self.patch_shape,
+                                         self.normalize_patches, level_str,
+                                         verbose)
 
             # build appearance model
             if verbose:
-                print_dynamic('{}Building appearance model'.format(level_str))
+                print_dynamic('{}Training appearance distribution per '
+                              'patch'.format(level_str))
+            n_points = warped_images.shape[-1]
+            patch_len = warped_images.shape[0]
+            app_len = warped_images.shape[0]*warped_images.shape[2]
+            app_mean = np.empty(app_len)
+            app_cov = np.zeros((app_len, app_len))
+            for p in range(n_points):
+                # print progress
+                if verbose:
+                    print_dynamic('{}Training appearance distribution '
+                                  'per patch - {}'.format(
+                                  level_str,
+                                  progress_bar_str(float(p + 1) / n_points,
+                                                   show_bar=False)))
+                # find indices in target mean and covariance matrices
+                i_from = p * patch_len
+                i_to = (p + 1) * patch_len
+                # compute and store mean
+                app_mean[i_from:i_to] = np.mean(warped_images[..., p], axis=1)
+                # compute and store covariance
+                app_cov[i_from:i_to, i_from:i_to] = np.cov(warped_images[..., p])
+
+            # add appearance model to the list
+            appearance_models.append((app_mean, app_cov))
 
             if verbose:
                 print_dynamic('{}Done\n'.format(level_str))
@@ -123,17 +147,20 @@ class APSBuilder(DeformableModelBuilder):
         # reverse the list of shape and appearance models so that they are
         # ordered from lower to higher resolution
         shape_models.reverse()
+        appearance_models.reverse()
         n_training_images = len(images)
 
-        return self._build_aps(shape_models, n_training_images)
+        return self._build_aps(shape_models, appearance_models,
+                               n_training_images)
 
-    def _build_aps(self, shape_models, n_training_images):
+    def _build_aps(self, shape_models, appearance_models, n_training_images):
         r"""
         """
         from .base import APS
-        return APS(shape_models, n_training_images, self.reference_shape,
-                   self.patch_shape, self.features, self.sigma, self.scales,
-                   self.scale_shapes, self.scale_features)
+        return APS(shape_models, appearance_models, n_training_images,
+                   self.reference_shape, self.patch_shape, self.features,
+                   self.sigma, self.scales, self.scale_shapes,
+                   self.scale_features)
 
 
 def _compute_reference_shape(images, group, label, normalization_diagonal,
@@ -183,8 +210,7 @@ def _compute_features(images, features, level_str, verbose):
                 '- Computing feature space: {}'.format(
                     level_str, progress_bar_str((c + 1.) / len(images),
                                                 show_bar=False)))
-        if features:
-            i = features(i)
+        i = features(i)
         feature_images.append(i)
 
     return feature_images
@@ -204,40 +230,63 @@ def _scale_images(images, s, level_str, verbose):
     return scaled_images
 
 
-def _warp_images(images, shapes, parts_shape, normalize_parts, level_str,
+def extract_patch_vectors(image, centres, patch_shape, normalize_patches=False):
+    r"""
+    returns a numpy.array of size (16*16*36)x68
+    """
+    # Extract patches
+    patches = extract_local_patches_fast(image, centres, patch_shape=patch_shape)
+
+    # initialize output matrix
+    patches_vectors = np.empty((np.prod(patches.shape[1:]), patches.shape[0]))
+
+    # extract each vector
+    for p in range(patches.shape[0]):
+        # normalize parts
+        if normalize_patches:
+            # build parts image
+            img = Image(patches[p, ...])
+
+            # normalize
+            img.normalize_norm_inplace()
+
+            # extract vector
+            patches_vectors[:, p] = img.as_vector()
+        else:
+            patches_vectors[:, p] = patches[p, ...].ravel()
+
+    # vectorize parts
+    return patches_vectors
+
+
+def _warp_images(images, shapes, patch_shape, normalize_patches, level_str,
                  verbose):
     r"""
+    returns numpy.array of size (16*16*36) x n_images x 68
     """
+    # find length of each patch
+    patches_len = np.prod(patch_shape) * images[0].n_channels
+
+    # initialize an output numpy array
+    patches_array = np.empty((patches_len, shapes[0].n_points, len(images)))
+
     # extract parts
-    parts_images = []
     for c, (i, s) in enumerate(zip(images, shapes)):
+        # print progress
         if verbose:
-            print_dynamic('{}Warping images - {}'.format(
+            print_dynamic('{}Extracting patches from images - {}'.format(
                 level_str,
                 progress_bar_str(float(c + 1) / len(images),
                                  show_bar=False)))
-        parts_image = build_parts_image(
-            i, s, parts_shape=parts_shape,
-            normalize_parts=normalize_parts)
-        parts_images.append(parts_image)
+        # extract patches from this image
+        patches_vectors = extract_patch_vectors(
+            i, s, patch_shape=patch_shape, normalize_patches=normalize_patches)
 
-    return parts_images
+        # store
+        patches_array[..., c] = patches_vectors
 
-
-def build_parts_image(image, centres, parts_shape, normalize_parts=False):
-    r"""
-    """
-    parts = extract_local_patches_fast(image, centres, patch_shape=parts_shape)
-
-    # build parts image
-    img = Image(parts)
-
-    if normalize_parts:
-        # normalize parts
-        #img.normalize_norm_inplace()
-        print 'I was supposed to normalize'
-
-    return img
+    # rollaxis and return
+    return np.rollaxis(patches_array, 2, 1)
 
 
 def flatten_out(list_of_lists):
