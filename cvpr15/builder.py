@@ -8,14 +8,16 @@ from menpo.fitmultilevel.builder import (DeformableModelBuilder,
                                          build_shape_model)
 from menpo.fitmultilevel import checks
 from menpo.visualize import print_dynamic, progress_bar_str
-from menpo.feature import igo, gaussian_filter, hog
+from menpo.feature import igo, gaussian_filter
 
 from menpo.fitmultilevel.functions import extract_local_patches_fast
 from menpo.image import Image
 
+from menpo.shape import
+
 
 class APSBuilder(DeformableModelBuilder):
-    def __init__(self, features=hog, patch_shape=(16, 16),
+    def __init__(self, features=igo, patch_shape=(16, 16),
                  normalize_patches=False, normalization_diagonal=None,
                  sigma=None, scales=(1., 0.5), scale_shapes=True,
                  scale_features=True, max_shape_components=None):
@@ -136,7 +138,8 @@ class APSBuilder(DeformableModelBuilder):
                 # compute and store mean
                 app_mean[i_from:i_to] = np.mean(warped_images[..., p], axis=1)
                 # compute and store covariance
-                app_cov[i_from:i_to, i_from:i_to] = np.cov(warped_images[..., p])
+                cov_mat = np.cov(warped_images[..., p])
+                app_cov[i_from:i_to, i_from:i_to] = np.linalg.inv(cov_mat)
 
             # add appearance model to the list
             appearance_models.append((app_mean, app_cov))
