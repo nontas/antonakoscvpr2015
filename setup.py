@@ -14,10 +14,6 @@ else:
     import numpy as np
 
     # ---- C/C++ EXTENSIONS ---- #
-    cython_modules = ["cvpr15/cython/compute_gradient.pyx",
-                      "cvpr15/cython/extract_patches.pyx"]
-
-    cython_exts = cythonize(cython_modules, quiet=True)
     include_dirs = [np.get_include()]
 
     install_requires = ['menpo>=0.3.0',
@@ -29,7 +25,6 @@ setup(name='cvpr15',
       author='Epameinondas Antonakos',
       author_email='antonakosn@gmail.com',
       include_dirs=include_dirs,
-      ext_modules=cython_exts,
       packages=find_packages(),
       install_requires=install_requires
 )
