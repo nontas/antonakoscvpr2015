@@ -10,14 +10,14 @@ if on_rtd:
     include_dirs = []
     cython_exts = []
 else:
-    from Cython.Build import cythonize
     import numpy as np
 
     # ---- C/C++ EXTENSIONS ---- #
     include_dirs = [np.get_include()]
 
     install_requires = ['menpo>=0.3.0',
-                        'scikit-image>=0.10.1']
+                        'scikit-image>=0.10.1',
+                        'menpofit']
 
 setup(name='cvpr15',
       version='0.0',

@@ -1,16 +1,16 @@
 from __future__ import division
 from copy import deepcopy
 import numpy as np
+from scipy.misc import comb as nchoosek
+from scipy.stats import multivariate_normal
 
 from menpo.transform import Scale
-from menpo.fitmultilevel.builder import (DeformableModelBuilder,
-                                         build_shape_model,
-                                         compute_reference_shape)
-from menpo.fitmultilevel import checks
+from menpofit.builder import (DeformableModelBuilder, build_shape_model,
+                              compute_reference_shape)
+from menpofit import checks
 from menpo.visualize import print_dynamic, progress_bar_str
 from menpo.feature import igo, gaussian_filter
-
-from menpo.shape import PointTree, Tree
+from menpo.shape import PointTree, Tree, UndirectedGraph
 
 
 class APSBuilder(DeformableModelBuilder):
@@ -26,11 +26,13 @@ class APSBuilder(DeformableModelBuilder):
             max_shape_components, n_levels, 'max_shape_components')
         features = checks.check_features(features, n_levels)
 
-        # create and store tree
-        self.tree = Tree(adjacency_array, root_vertex)
+        # flag whether to create MST
+        self.tree_is_mst = adjacency_array is None
+        if adjacency_array is not None:
+            self.tree = Tree(adjacency_array, root_vertex)
 
         # store parameters
-        self.adjacency_array = adjacency_array
+        self.root_vertex = root_vertex
         self.features = features
         self.patch_size = patch_size
         self.normalize_patches = normalize_patches
@@ -53,6 +55,11 @@ class APSBuilder(DeformableModelBuilder):
         images = _normalize_images(images, group, label, self.reference_shape,
                                    self.sigma, verbose)
         shapes = [i.landmarks[group][label] for i in images]
+
+        # if tree not provided, compute the MST
+        if self.tree_is_mst:
+            self.tree = compute_minimum_spanning_tree(shapes, self.root_vertex,
+                                                      '- ', verbose)
 
         # build the model at each pyramid level
         if verbose:
@@ -228,9 +235,9 @@ class APSBuilder(DeformableModelBuilder):
         """
         from .base import APS
         return APS(shape_models, deformation_models, appearance_models,
-                   n_training_images, self.reference_shape, self.patch_size,
-                   self.features, self.sigma, self.scales, self.scale_shapes,
-                   self.scale_features)
+                   n_training_images, self.tree, self.reference_shape,
+                   self.patch_size, self.features, self.sigma, self.scales,
+                   self.scale_shapes, self.scale_features)
 
 
 def _normalize_images(images, group, label, reference_shape, sigma, verbose):
@@ -356,9 +363,9 @@ def _get_relative_locations(shapes, tree, level_str, verbose):
     r"""
     returns numpy.array of size 2 x n_images x n_edges
     """
-    # convert point clouds to point trees
-    point_trees = [PointTree(shape.points, adjacency_array=tree.adjacency_array,
-                             root_vertex=tree.root_vertex)
+    # convert given shapes to point trees
+    point_trees = [PointTree(shape.points, tree.adjacency_array,
+                             tree.root_vertex)
                    for shape in shapes]
 
     # initialize an output numpy array
@@ -385,3 +392,56 @@ def _get_relative_locations(shapes, tree, level_str, verbose):
 
 def flatten_out(list_of_lists):
     return [i for l in list_of_lists for i in l]
+
+
+def compute_minimum_spanning_tree(shapes, root_vertex, level_str, verbose):
+    # initialize edges and weights matrix
+    n_vertices = shapes[0].n_points
+    n_edges = nchoosek(n_vertices, 2)
+    weights = np.zeros((n_vertices, n_vertices))
+    edges = np.empty((n_edges, 2), dtype=np.int32)
+
+    # fill edges and weights
+    e = -1
+    for i in range(n_vertices-1):
+        for j in range(i+1, n_vertices, 1):
+            # edge counter
+            e += 1
+
+            # print progress
+            if verbose:
+                print_dynamic('{}Computing complete graph`s weights - {}'.format(
+                    level_str,
+                    progress_bar_str(float(e + 1) / n_edges,
+                                     show_bar=False)))
+
+            # fill in edges
+            edges[e, 0] = i
+            edges[e, 1] = j
+
+            # create data matrix of edge
+            diffs_x = [s.points[i, 0] - s.points[j, 0] for s in shapes]
+            diffs_y = [s.points[i, 1] - s.points[j, 1] for s in shapes]
+            coords = np.array([diffs_x, diffs_y])
+
+            # compute mean
+            m = np.mean(coords, axis=1)
+
+            # compute covariance
+            c = np.cov(coords)
+
+            # get weight
+            for im in range(len(shapes)):
+                weights[i, j] += -np.log(multivariate_normal.pdf(coords[:, im],
+                                                                 mean=m, cov=c))
+            weights[j, i] = weights[i, j]
+
+    # create undirected graph
+    complete_graph = UndirectedGraph(edges)
+
+    if verbose:
+        print_dynamic('{}Minimum spanning tree computed.\n'.format(level_str))
+
+    # compute minimum spanning tree
+    return complete_graph.minimum_spanning_tree(weights, root_vertex)
+
