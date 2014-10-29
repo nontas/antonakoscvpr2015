@@ -3,27 +3,25 @@ import numpy as np
 
 from hdf5able import HDF5able, SerializableCallable
 from menpofit.base import DeformableModel
+from menpo.shape import PointTree
 
 
 class APS(DeformableModel, HDF5able):
     """
     """
     def __init__(self, shape_models, deformation_models, appearance_models,
-                 n_training_images, tree, reference_shape, patch_shape,
-                 features, sigma, scales, scale_shapes, scale_features):
+                 n_training_images, tree, patch_shape, features,
+                 reference_shape, downscale, scaled_shape_models):
         DeformableModel.__init__(self, features)
+        self.n_training_images = n_training_images
         self.shape_models = shape_models
         self.deformation_models = deformation_models
         self.appearance_models = appearance_models
-        self.n_training_images = n_training_images
         self.tree = tree
         self.patch_shape = patch_shape
-        self.features = features
-        self.sigma = sigma
         self.reference_shape = reference_shape
-        self.scales = scales
-        self.scale_shapes = scale_shapes
-        self.scale_features = scale_features
+        self.downscale = downscale
+        self.scaled_shape_models = scaled_shape_models
 
     def h5_dict_to_serializable_dict(self):
         """
@@ -32,7 +30,7 @@ class APS(DeformableModel, HDF5able):
         d = self.__dict__.copy()
 
         features = d.pop('features')
-        if self.scale_features:
+        if self.pyramid_on_features:
             # features is a single callable
             d['features'] = SerializableCallable(features, [menpo.feature])
         else:
@@ -45,9 +43,9 @@ class APS(DeformableModel, HDF5able):
     def n_levels(self):
         """
         """
-        return len(self.scales)
+        return len(self.shape_models)
 
-    def instance(self, shape_weights=None, level=-1):
+    def instance(self, shape_weights=None, level=-1, as_tree=False):
         r"""
         """
         sm = self.shape_models[level]
@@ -58,10 +56,14 @@ class APS(DeformableModel, HDF5able):
         n_shape_weights = len(shape_weights)
         shape_weights *= sm.eigenvalues[:n_shape_weights] ** 0.5
         shape_instance = sm.instance(shape_weights)
+        if as_tree:
+            shape_instance = PointTree(shape_instance.points,
+                                       self.tree.adjacency_array,
+                                       self.tree.root_vertex)
 
         return shape_instance
 
-    def random_instance(self, level=-1):
+    def random_instance(self, level=-1, as_tree=False):
         r"""
         """
         sm = self.shape_models[level]
@@ -70,5 +72,29 @@ class APS(DeformableModel, HDF5able):
         shape_weights = (np.random.randn(sm.n_active_components) *
                          sm.eigenvalues[:sm.n_active_components]**0.5)
         shape_instance = sm.instance(shape_weights)
+        if as_tree:
+            shape_instance = PointTree(shape_instance.points,
+                                       self.tree.adjacency_array,
+                                       self.tree.root_vertex)
 
         return shape_instance
+
+    def view_widget(self, n_parameters=5, parameters_bounds=(-3.0, 3.0),
+                    mode='multiple', popup=False):
+        r"""
+        """
+        from menpofit.visualize import visualize_shape_model
+        visualize_shape_model(self.shape_models, n_parameters=n_parameters,
+                              parameters_bounds=parameters_bounds,
+                              figure_size=(7, 7), mode=mode, popup=popup)
+
+    @property
+    def _str_title(self):
+        r"""
+        """
+        return 'Active Pictorial Structure'
+
+    def __str__(self):
+        r"""
+        """
+        return self._str_title()
