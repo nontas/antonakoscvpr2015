@@ -107,16 +107,8 @@ class APSInterface(object):
         h_s: shape hessian (H_s)
         p: current shape parameters
         """
-        print "H: {} x {}".format(h.shape[0], h.shape[1])
         inv_h = np.linalg.inv(h)
-        print "H^-1: {} x {}".format(inv_h.shape[0], inv_h.shape[1])
-        print "J_a: {} x {}".format(j.shape[0], j.shape[1])
         j_T_sigma_a = j.T.dot(sigma_a)
-        print "J_a^T * S_a: {} x {}".format(j_T_sigma_a.shape[0],
-                                            j_T_sigma_a.shape[1])
-        print "e: {}".format(e.shape[0])
-        print "h_s: {} x {}".format(h_s.shape[0], h_s.shape[1])
-        print "p: {}".format(p.shape[0])
         b = j_T_sigma_a.dot(e) + h_s.dot(p)
         dp = - np.linalg.solve(inv_h, b)
         return dp
