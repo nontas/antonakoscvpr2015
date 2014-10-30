@@ -4,7 +4,7 @@ import numpy as np
 from menpofit.fitter import MultilevelFitter
 from menpofit.fittingresult import MultilevelFittingResult
 from menpofit.transform.modeldriven import OrthoPDM
-from menpofit.transform.homogeneous import AlignmentSimilarity
+from menpofit.transform.homogeneous import DifferentiableAlignmentSimilarity
 from menpo.transform.homogeneous import Scale
 
 from .algorithm import APSInterface, Forward
@@ -39,14 +39,8 @@ class APSFitter(MultilevelFitter):
         return MultilevelFittingResult(
             image, self, fitting_results, affine_correction, gt_shape=gt_shape)
 
-    def _fit(self, images, initial_shape, gt_shapes=None, max_iters=50,
-             **kwargs):
-        r"""
-        """
-        shape = initial_shape
-        gt_shape = None
+    def _prepare_max_iters(self, max_iters):
         n_levels = self.n_levels
-
         # check max_iters parameter
         if type(max_iters) is int:
             max_iters = [np.round(max_iters/n_levels)
@@ -58,6 +52,17 @@ class APSFitter(MultilevelFitter):
             raise ValueError('max_iters can be integer, integer list '
                              'containing 1 or {} elements or '
                              'None'.format(self.n_levels))
+        return np.require(max_iters, dtype=np.int)
+
+    def _fit(self, images, initial_shape, gt_shapes=None, max_iters=50,
+             **kwargs):
+        r"""
+        """
+        shape = initial_shape
+        gt_shape = None
+
+        # check max_iters parameter
+        max_iters = self._prepare_max_iters(max_iters)
 
         # fit images
         fitting_results = []
@@ -90,7 +95,7 @@ class LucasKanadeAPSFitter(APSFitter):
         return 'LK-APS-' + self._fitters[0].algorithm
 
     def _set_up(self, algorithm=Forward, md_transform=OrthoPDM,
-                global_transform=AlignmentSimilarity,
+                global_transform=DifferentiableAlignmentSimilarity,
                 n_shape=None, n_appearance=None, **kwargs):
         r"""
         """

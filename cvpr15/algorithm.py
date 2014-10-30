@@ -9,12 +9,20 @@ class APSInterface(object):
     def __init__(self, algorithm):
         self.algorithm = algorithm
 
-    def dS_dp(self):
+    def ds_dp(self):
         r"""
         Shape jacobian
-        dS_dp = U --> (size: n_s x 2n)
+        dS_dp = U --> (size: 2 x n x n_s)
         """
-        return self.algorithm.transform.model.components
+        return np.rollaxis(self.algorithm.transform.d_dp(None), -1)
+
+    def ds_dp_vectorized(self):
+        r"""
+        Shape jacobian
+        dS_dp = U --> (size: 2n x n_s)
+        """
+        n_params = self.ds_dp().shape[-1]
+        return self.ds_dp().reshape([-1, n_params], order='F')
 
     def Sigma_s(self):
         r"""
@@ -28,7 +36,8 @@ class APSInterface(object):
         Deformation hessian
         H_s = U.T * Sigma_s * U --> (size: n_s x n_s)
         """
-        return self.dS_dp().dot(self.Sigma_s()).dot(self.dS_dp().T)
+        tmp = self.ds_dp_vectorized().T.dot(self.Sigma_s())
+        return tmp.dot(self.ds_dp_vectorized())
 
     def warp(self, image):
         r"""
@@ -62,23 +71,55 @@ class APSInterface(object):
         gradients = np.rollaxis(gradients, 3, 2)
         return gradients
 
-    def steepest_descent_images(self, gradient, dS_dp):
+    def steepest_descent_images(self, gradient, ds_dp):
         # reshape gradient
         # gradient: n_dims x n_channels x n_parts x (w x h)
-        gradient = gradient[self.gradient_mask].reshape(
-            gradient.shape[:-2] + (-1,))
+
         # compute steepest descent images
         # gradient: n_dims x n_channels x n_parts x (w x h)
-        # dS_dp:    n_dims x            x n_parts x         x n_params
+        # ds_dp:    n_dims x            x n_parts x         x n_params
         # sdi:               n_channels x n_parts x (w x h) x n_params
         sdi = 0
-        a = gradient[..., None] * dS_dp[..., None, :, None, :]
+        a = gradient[..., None] * ds_dp[..., None, :, None, :]
         for d in a:
             sdi += d
 
         # reshape steepest descent images
         # sdi: (n_channels x n_parts x w x h) x n_params
         return sdi.reshape((-1, sdi.shape[3]))
+
+    def H_a(self, J, Sigma):
+        r"""
+        Appearance hessian
+        H_a = J.T * Sigma_a * J --> (size: n_s x n_s)
+        """
+        tmp = J.T.dot(Sigma)
+        return tmp.dot(J)
+
+    def solve(self, h, j, e, sigma_a, h_s, p):
+        r"""
+        Parameters increment
+        dp --> (size: n_s x 1)
+        h: hessian (H = H_a + H_s)
+        j: appearance jacobian (J_a)
+        e: error image
+        sigma_a: appearance covariance (S_a)
+        h_s: shape hessian (H_s)
+        p: current shape parameters
+        """
+        print "H: {} x {}".format(h.shape[0], h.shape[1])
+        inv_h = np.linalg.inv(h)
+        print "H^-1: {} x {}".format(inv_h.shape[0], inv_h.shape[1])
+        print "J_a: {} x {}".format(j.shape[0], j.shape[1])
+        j_T_sigma_a = j.T.dot(sigma_a)
+        print "J_a^T * S_a: {} x {}".format(j_T_sigma_a.shape[0],
+                                            j_T_sigma_a.shape[1])
+        print "e: {}".format(e.shape[0])
+        print "h_s: {} x {}".format(h_s.shape[0], h_s.shape[1])
+        print "p: {}".format(p.shape[0])
+        b = j_T_sigma_a.dot(e) + h_s.dot(p)
+        dp = - np.linalg.solve(inv_h, b)
+        return dp
 
     def fitting_result(self, image, shape_parameters, gt_shape):
         return SemiParametricFittingResult(image, self.algorithm,
@@ -106,7 +147,8 @@ class APSAlgorithm(object):
         self.interface = aps_interface(self)
 
         # precompute
-        self._H_s = self.interface.H_s
+        self._H_s = self.interface.H_s()
+        self._ds_dp = self.interface.ds_dp()
 
     @abc.abstractmethod
     def _precompute(self):
@@ -146,6 +188,27 @@ class Forward(APSAlgorithm):
 
             # compute image gradient
             nabla_i = self.interface.gradient(i)
+
+           # compute appearance jacobian
+            j = self.interface.steepest_descent_images(nabla_i, self._ds_dp)
+
+            # compute hessian
+            h = self.interface.H_a(j, self.appearance_model[1]) + self._H_s
+
+            # compute gauss-newton parameter updates
+            dp = self.interface.solve(h, j, e, self.appearance_model[1],
+                                      self._H_s, shape_parameters[-1])
+
+            # update transform
+            target = self.transform.target
+            self.transform.from_vector_inplace(self.transform.as_vector() + dp)
+            shape_parameters.append(self.transform.as_vector())
+
+            # test convergence
+            error = np.abs(np.linalg.norm(
+                target.points - self.transform.target.points))
+            if error < self.eps:
+                break
 
         # return fitting result
         return self.interface.fitting_result(image, shape_parameters,
