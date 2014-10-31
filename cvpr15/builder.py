@@ -11,12 +11,14 @@ from menpo.visualize import print_dynamic, progress_bar_str
 from menpo.feature import igo
 from menpo.shape import PointTree, Tree, UndirectedGraph
 
+from .utils import build_patches_image, vectorize_patches_image
+
 
 class APSBuilder(DeformableModelBuilder):
     def __init__(self, adjacency_array=None, root_vertex=0, features=igo,
                  patch_shape=(16, 16), normalization_diagonal=None, n_levels=3,
-                 downscale=2, scaled_shape_models=True, use_svd=False,
-                 max_shape_components=None):
+                 downscale=2, scaled_shape_models=True,
+                 max_shape_components=None, n_appearance_parameters=None):
         # check parameters
         checks.check_n_levels(n_levels)
         checks.check_downscale(downscale)
@@ -39,7 +41,7 @@ class APSBuilder(DeformableModelBuilder):
         self.downscale = downscale
         self.scaled_shape_models = scaled_shape_models
         self.max_shape_components = max_shape_components
-        self.use_svd = use_svd
+        self.n_appearance_parameters = n_appearance_parameters
 
     def build(self, images, group=None, label=None, verbose=False):
         # compute reference_shape and normalize images size
@@ -76,8 +78,8 @@ class APSBuilder(DeformableModelBuilder):
             # parameters in form of list need to use a reversed index
             rj = self.n_levels - j - 1
 
+            level_str = '  - '
             if verbose:
-                level_str = '  - '
                 if self.n_levels > 1:
                     level_str = '  - Level {}: '.format(j + 1)
 
@@ -123,12 +125,16 @@ class APSBuilder(DeformableModelBuilder):
                 self.tree, relative_locations, level_str, verbose))
 
             # extract patches from all images
-            warped_images = _warp_images(feature_images, group, label,
-                                         self.patch_shape, level_str, verbose)
+            all_patches_array = _warp_images(feature_images, group, label,
+                                             self.patch_shape, level_str,
+                                             verbose)
 
             # build and add appearance model to the list
+            n_points = images[0].landmarks[group][label].n_points
+            n_channels = feature_images[0].n_channels
             appearance_models.append(_build_appearance_model(
-                warped_images, self.use_svd, level_str, verbose))
+                all_patches_array, n_points, self.patch_shape, n_channels,
+                self.n_appearance_parameters, level_str, verbose))
 
             if verbose:
                 print_dynamic('{}Done\n'.format(level_str))
@@ -154,52 +160,17 @@ class APSBuilder(DeformableModelBuilder):
                    self.scaled_shape_models)
 
 
-def extract_patch_vectors(image, group, label, patch_size,
-                          normalize_patches=False):
+def _warp_images(images, group, label, patch_shape, level_str, verbose):
     r"""
-    returns a numpy.array of size (16*16*36) x 68
-    """
-    # extract patches
-    patches = image.extract_patches_around_landmarks(
-        group=group, label=label, patch_size=patch_size,
-        as_single_array=not normalize_patches)
-
-    # vectorize patches
-    if normalize_patches:
-        # initialize output matrix
-        patches_vectors = np.empty(
-            (np.prod(patches[0].shape) * patches[0].n_channels, len(patches)))
-
-        # extract each vector
-        for p in range(len(patches)):
-            # normalize part
-            patches[p].normalize_norm_inplace()
-
-            # extract vector
-            patches_vectors[:, p] = patches[p].as_vector()
-    else:
-        # initialize output matrix
-        patches_vectors = np.empty((np.prod(patches.shape[1:]),
-                                    patches.shape[0]))
-
-        # extract each vector
-        for p in range(patches.shape[0]):
-            patches_vectors[:, p] = patches[p, ...].ravel()
-
-    # return vectorized parts
-    return patches_vectors
-
-
-def _warp_images(images, group, label, patch_size, level_str, verbose):
-    r"""
-    returns numpy.array of size (16*16*36) x n_images x 68
+    returns numpy.array of size (68*16*16*36) x n_images
     """
     # find length of each patch and number of points
-    patches_len = np.prod(patch_size) * images[0].n_channels
     n_points = images[0].landmarks[group][label].n_points
+    patches_len = np.prod(patch_shape) * images[0].n_channels * n_points
+    n_images = len(images)
 
-    # initialize an output numpy array
-    patches_array = np.empty((patches_len, n_points, len(images)))
+    # initialize the output numpy array
+    all_patches_array = np.empty((patches_len, n_images))
 
     # extract parts
     for c, i in enumerate(images):
@@ -211,15 +182,12 @@ def _warp_images(images, group, label, patch_size, level_str, verbose):
                                  show_bar=False)))
 
         # extract patches from this image
-        patches_vectors = extract_patch_vectors(
-            i, group=group, label=label, patch_size=patch_size,
-            normalize_patches=False)
+        patches_image = build_patches_image(i, None, patch_shape)
 
         # store
-        patches_array[..., c] = patches_vectors
+        all_patches_array[..., c] = vectorize_patches_image(patches_image)
 
-    # rollaxis and return
-    return np.rollaxis(patches_array, 2, 1)
+    return all_patches_array
 
 
 def _get_relative_locations(shapes, tree, level_str, verbose):
@@ -365,15 +333,25 @@ def _build_deformation_model(tree, relative_locations, level_str, verbose):
     return def_cov
 
 
-def _build_appearance_model(warped_images, use_svd, level_str, verbose):
+def _build_appearance_model(all_patches_array, n_points, patch_shape,
+                            n_channels, n_appearance_parameters, level_str,
+                            verbose):
     # build appearance model
     if verbose:
         print_dynamic('{}Training appearance distribution per '
                       'patch'.format(level_str))
-    n_points = warped_images.shape[-1]
-    patch_len = warped_images.shape[0]
-    app_len = patch_len * n_points
-    app_mean = np.empty(app_len)
+    # compute mean appearance vector
+    app_mean = np.mean(all_patches_array, axis=1)
+
+    # appearance vector and patch vector lengths
+    app_len = all_patches_array.shape[0]
+    patch_len = np.prod(patch_shape) * n_channels
+
+    # check n_appearance_parameters
+    if n_appearance_parameters is None:
+        n_appearance_parameters = patch_len
+
+    # compute covariance
     app_cov = np.zeros((app_len, app_len))
     for e in range(n_points):
         # print progress
@@ -383,22 +361,15 @@ def _build_appearance_model(warped_images, use_svd, level_str, verbose):
                           level_str,
                           progress_bar_str(float(e + 1) / n_points,
                                            show_bar=False)))
-        # find indices in target mean and covariance matrices
+        # find indices in target covariance matrix
         i_from = e * patch_len
         i_to = (e + 1) * patch_len
-        # compute and store mean
-        app_mean[i_from:i_to] = np.mean(warped_images[..., e], axis=1)
         # compute and store covariance
-        cov_mat = np.cov(warped_images[..., e])
-        app_cov[i_from:i_to, i_from:i_to] = np.linalg.inv(cov_mat)
+        cov_mat = np.cov(all_patches_array[i_from:i_to, :])
+        s, v, d = np.linalg.svd(cov_mat)
+        s = s[:, :n_appearance_parameters]
+        v = v[:n_appearance_parameters]
+        d = d[:n_appearance_parameters, :]
+        app_cov[i_from:i_to, i_from:i_to] = s.dot(np.diag(1/v)).dot(d)
 
-    if use_svd:
-        # singular value decomposition
-        # build appearance model
-        if verbose:
-            print_dynamic('{}Performing SVD on the appearance '
-                          'covariance'.format(level_str))
-        u, s, v = np.linalg.svd(app_cov)
-        return app_mean, u, s, v
-    else:
-        return app_mean, app_cov
+    return app_mean, app_cov

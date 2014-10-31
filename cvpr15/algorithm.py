@@ -3,6 +3,8 @@ import abc
 import numpy as np
 
 from menpofit.fittingresult import SemiParametricFittingResult
+from menpo.image import Image
+from .utils import build_patches_image, vectorize_patches_image
 
 
 class APSInterface(object):
@@ -42,39 +44,42 @@ class APSInterface(object):
     def warp(self, image):
         r"""
         Warp function F: It extracts the patches around each shape point
-        returns a list with the patches
+        returns an image object of size:
+        n_points x patch_shape[0] x patch_shape[1] x n_channels
         """
-        return extract_patches(image, self.algorithm.transform.target,
-                               self.algorithm.patch_shape,
-                               normalize_patches=False)
+        return build_patches_image(image, self.algorithm.transform.target,
+                                   self.algorithm.patch_shape)
 
-    def vectorize(self, patches_list):
+    def vectorize(self, patches_image):
         r"""
-        Vectorization function A: It vectorizes a given list of patches.
+        Vectorization function A: It vectorizes a given patches image.
         Returns an ndarray of size (m*n) x 1
         """
-        return vectorize_patches(patches_list)
+        return vectorize_patches_image(patches_image)
 
     def gradient(self, patches):
         r"""
         Returns the gradients of the patches
         n_dims x n_channels x n_points x (w x h)
         """
-        n_dims = patches[0].n_dims
-        n_channels = patches[0].n_channels
-        wh = np.prod(patches[0].shape)
-        n_points = len(patches)
-        gradients = np.empty((n_dims, n_channels, wh, n_points))
-        for k, i in enumerate(patches):
-            g = i.gradient().as_vector(keep_channels=True)
-            gradients[..., k] = np.reshape(g, (-1, n_channels, n_dims)).T
-        gradients = np.rollaxis(gradients, 3, 2)
-        return gradients
+        n_points = patches.pixels.shape[0]
+        h = patches.pixels.shape[1]
+        w = patches.pixels.shape[2]
+        n_channels = patches.pixels.shape[3]
+
+        # initial patches: n_parts x height x width x n_channels
+        pixels = patches.pixels
+        # move parts axis to end: height x width x n_channels x n_parts
+        pixels = np.rollaxis(pixels, 0, pixels.ndim)
+        # merge channels and parts axes: height x width x (n_channels * n_parts)
+        pixels = np.reshape(pixels, (h, w, -1), order='F')
+        # compute and vectorize gradient: (height * width) x (n_channels * n_parts * n_dims)
+        g = Image(pixels).gradient().as_vector(keep_channels=True)
+        # reshape gradient: (height * width) x n_parts x n_channels x n_dims
+        # then transpose it: n_dims x n_channels x n_parts x (height * width)
+        return np.reshape(g, (-1, n_points, n_channels, 2)).T
 
     def steepest_descent_images(self, gradient, ds_dp):
-        # reshape gradient
-        # gradient: n_dims x n_channels x n_parts x (w x h)
-
         # compute steepest descent images
         # gradient: n_dims x n_channels x n_parts x (w x h)
         # ds_dp:    n_dims x            x n_parts x         x n_params
@@ -86,31 +91,24 @@ class APSInterface(object):
 
         # reshape steepest descent images
         # sdi: (n_channels x n_parts x w x h) x n_params
+        sdi = sdi.reshape((-1, sdi.shape[3]))
+        sdi = sdi.reshape((gradient.shape[1], gradient.shape[2], -1, sdi.shape[-1]))
+        sdi = np.rollaxis(sdi, -2, 0)
         return sdi.reshape((-1, sdi.shape[3]))
 
-    def H_a(self, J, Sigma):
-        r"""
-        Appearance hessian
-        H_a = J.T * Sigma_a * J --> (size: n_s x n_s)
-        """
-        tmp = J.T.dot(Sigma)
-        return tmp.dot(J)
-
-    def solve(self, h, j, e, sigma_a, h_s, p):
+    def solve(self, h, ja, e, h_s, p):
         r"""
         Parameters increment
         dp --> (size: n_s x 1)
         h: hessian (H = H_a + H_s)
-        j: appearance jacobian (J_a)
+        ja: (J_a^T * S_a)
         e: error image
         sigma_a: appearance covariance (S_a)
         h_s: shape hessian (H_s)
         p: current shape parameters
         """
-        inv_h = np.linalg.inv(h)
-        j_T_sigma_a = j.T.dot(sigma_a)
-        b = j_T_sigma_a.dot(e) + h_s.dot(p)
-        dp = - np.linalg.solve(inv_h, b)
+        b = ja.dot(e) + h_s.dot(p)
+        dp = -np.linalg.solve(h, b)
         return dp
 
     def fitting_result(self, image, shape_parameters, gt_shape):
@@ -181,15 +179,18 @@ class Forward(APSAlgorithm):
             # compute image gradient
             nabla_i = self.interface.gradient(i)
 
-           # compute appearance jacobian
+            # compute appearance jacobian
             j = self.interface.steepest_descent_images(nabla_i, self._ds_dp)
+            ja = j.T.dot(self.appearance_model[1])
 
             # compute hessian
-            h = self.interface.H_a(j, self.appearance_model[1]) + self._H_s
+            h = ja.dot(j) + self._H_s
 
             # compute gauss-newton parameter updates
-            dp = self.interface.solve(h, j, e, self.appearance_model[1],
+            dp = self.interface.solve(h, ja, e,
                                       self._H_s, shape_parameters[-1])
+
+            nontas
 
             # update transform
             target = self.transform.target
@@ -197,68 +198,11 @@ class Forward(APSAlgorithm):
             shape_parameters.append(self.transform.as_vector())
 
             # test convergence
-            error = np.abs(np.linalg.norm(
-                target.points - self.transform.target.points))
+            error = np.abs(np.linalg.norm(target.points -
+                                          self.transform.target.points))
             if error < self.eps:
                 break
 
         # return fitting result
         return self.interface.fitting_result(image, shape_parameters,
                                              gt_shape=gt_shape)
-
-
-def extract_patches(image, centres, patch_shape, normalize_patches=False):
-    # extract patches
-    patches = image.extract_patches(centres, patch_size=patch_shape,
-                                    as_single_array=False)
-
-    # normalize if asked to
-    if normalize_patches:
-        for p in range(len(patches)):
-            patches[p].normalize_norm_inplace()
-    return patches
-
-
-def vectorize_patches(patches):
-    # find lengths
-    patch_len = np.prod(patches[0].shape) * patches[0].n_channels
-    n_points = len(patches)
-
-    # initialize output matrix
-    patches_vectors = np.empty(patch_len * n_points)
-
-    # extract each vector
-    for p in range(n_points):
-        # find indices in target vector
-        i_from = p * patch_len
-        i_to = (p + 1) * patch_len
-
-        # store vector
-        patches_vectors[i_from:i_to] = patches[p].as_vector()
-
-    return patches_vectors
-
-
-def steepest_descent_image(image, dW_dp):
-    # compute gradient
-    # gradient:  height  x  width  x  (n_channels x n_dims)
-    gradient = image.gradient(image)
-
-    # reshape gradient
-    # gradient:  n_pixels  x  (n_channels x n_dims)
-    gradient = gradient.as_vector(keep_channels=True)
-
-    # reshape gradient
-    # gradient:  n_pixels  x  n_channels  x  n_dims
-    gradient = np.reshape(gradient, (-1, image.n_channels,
-                                     image.n_dims))
-
-    # compute steepest descent images
-    # gradient:  n_pixels  x  n_channels  x            x  n_dims
-    # dW_dp:     n_pixels  x              x  n_params  x  n_dims
-    # sdi:       n_pixels  x  n_channels  x  n_params
-    sdi = np.sum(dW_dp[:, None, :, :] * gradient[:, :, None, :], axis=3)
-
-    # reshape steepest descent images
-    # sdi:  (n_pixels x n_channels)  x  n_params
-    return np.reshape(sdi, (-1, dW_dp.shape[1]))
