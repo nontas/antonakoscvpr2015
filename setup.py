@@ -1,5 +1,4 @@
 import os
-import sys
 from setuptools import setup, find_packages
 
 on_rtd = os.environ.get('READTHEDOCS', None) == 'True'

@@ -83,20 +83,19 @@ class APSFitter(MultilevelFitter):
 class LucasKanadeAPSFitter(APSFitter):
 
     def __init__(self, aps, algorithm=Forward, md_transform=OrthoPDM,
-                 n_shape=None, n_appearance=None, **kwargs):
+                 n_shape=None, **kwargs):
         super(LucasKanadeAPSFitter, self).__init__(aps)
         self._set_up(algorithm=algorithm, md_transform=md_transform,
-                     n_shape=n_shape, n_appearance=n_appearance, **kwargs)
+                     n_shape=n_shape, **kwargs)
 
-    @property
-    def algorithm(self):
+    def __str__(self):
         r"""
         """
-        return 'LK-APS-' + self._fitters[0].algorithm
+        return 'Gauss-Newton APS ' + self._fitters[0]._algorithm_str()
 
     def _set_up(self, algorithm=Forward, md_transform=OrthoPDM,
                 global_transform=DifferentiableAlignmentSimilarity,
-                n_shape=None, n_appearance=None, **kwargs):
+                n_shape=None, **kwargs):
         r"""
         """
         # check n_shape parameter

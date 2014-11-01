@@ -53,7 +53,8 @@ class APSInterface(object):
     def vectorize(self, patches_image):
         r"""
         Vectorization function A: It vectorizes a given patches image.
-        Returns an ndarray of size (m*n) x 1
+        Returns an ndarray of size:
+        (n_points * patch_shape[0] * patch_shape[1] * n_channels) x 1
         """
         return vectorize_patches_image(patches_image)
 
@@ -88,15 +89,21 @@ class APSInterface(object):
         a = gradient[..., None] * ds_dp[..., None, :, None, :]
         for d in a:
             sdi += d
-
-        # reshape steepest descent images
-        # sdi: (n_channels x n_parts x w x h) x n_params
-        sdi = sdi.reshape((-1, sdi.shape[3]))
-        sdi = sdi.reshape((gradient.shape[1], gradient.shape[2], -1, sdi.shape[-1]))
-        sdi = np.rollaxis(sdi, -2, 0)
+        # sdi: n_parts x n_channels x (w x h) x n_params
+        sdi = np.rollaxis(sdi, 1, 0)
+        # sdi: n_parts x (w x h) x n_channels x n_params
+        sdi = np.rollaxis(sdi, 2, 1)
+        # sdi: (n_parts * w * h * n_channels) x n_params
         return sdi.reshape((-1, sdi.shape[3]))
 
-    def solve(self, h, ja, e, h_s, p):
+    def ja(self, j, S):
+        # compute the dot product between the apperance jacobian and the
+        # covariance matrix
+        # j: (n_parts * w * h * n_channels) x n_params
+        # S: (n_parts * w * h * n_channels) x (n_parts * w * h * n_channels)
+        return S.T.dot(j).T
+
+    def solve(self, h, ja, e, h_s, p, neg_sign):
         r"""
         Parameters increment
         dp --> (size: n_s x 1)
@@ -108,7 +115,10 @@ class APSInterface(object):
         p: current shape parameters
         """
         b = ja.dot(e) + h_s.dot(p)
-        dp = -np.linalg.solve(h, b)
+        if neg_sign:
+            dp = -np.linalg.solve(h, b)
+        else:
+            dp = np.linalg.solve(h, b)
         return dp
 
     def fitting_result(self, image, shape_parameters, gt_shape):
@@ -126,7 +136,10 @@ class APSAlgorithm(object):
         self.appearance_model = appearance_model
         self.deformation_model = deformation_model
         self.patch_shape = patch_shape
-        self.template = appearance_model[0]
+        n_points = deformation_model.shape[0] / 2
+        self.template = Image(np.reshape(appearance_model[0],
+                                         (n_points, patch_shape[0],
+                                          patch_shape[1], -1)))
         self.transform = transform
         self.eps = eps
 
@@ -136,12 +149,12 @@ class APSAlgorithm(object):
         # set interface
         self.interface = aps_interface(self)
 
-        # precompute
-        self._H_s = self.interface.H_s()
-        self._ds_dp = self.interface.ds_dp()
-
     @abc.abstractmethod
     def _precompute(self):
+        pass
+
+    @abc.abstractmethod
+    def _algorithm_str(self):
         pass
 
 
@@ -158,7 +171,14 @@ class Forward(APSAlgorithm):
         self._precompute()
 
     def _precompute(self):
-        pass
+        # compute warp jacobian
+        self._ds_dp = self.interface.ds_dp()
+
+        # compute shape hessian
+        self._H_s = self.interface.H_s()
+
+    def _algorithm_str(self):
+        return 'Forward'
 
     def run(self, image, initial_shape, gt_shape=None, max_iters=20):
         # initialize transform
@@ -181,20 +201,90 @@ class Forward(APSAlgorithm):
 
             # compute appearance jacobian
             j = self.interface.steepest_descent_images(nabla_i, self._ds_dp)
-            ja = j.T.dot(self.appearance_model[1])
+
+            # transposed jacobian and covariance dot product
+            ja = self.interface.ja(j, self.appearance_model[1])
 
             # compute hessian
             h = ja.dot(j) + self._H_s
 
             # compute gauss-newton parameter updates
-            dp = self.interface.solve(h, ja, e,
-                                      self._H_s, shape_parameters[-1])
-
-            nontas
+            dp = self.interface.solve(h, ja, e, self._H_s, shape_parameters[-1],
+                                      True)
 
             # update transform
             target = self.transform.target
             self.transform.from_vector_inplace(self.transform.as_vector() + dp)
+            shape_parameters.append(self.transform.as_vector())
+
+            # test convergence
+            error = np.abs(np.linalg.norm(target.points -
+                                          self.transform.target.points))
+            if error < self.eps:
+                break
+
+        # return fitting result
+        return self.interface.fitting_result(image, shape_parameters,
+                                             gt_shape=gt_shape)
+
+
+class Inverse(APSAlgorithm):
+
+    def __init__(self, aps_interface, appearance_model, deformation_model,
+                 patch_shape, transform, eps=10**-5):
+        # call super constructor
+        super(Inverse, self).__init__(aps_interface, appearance_model,
+                                      deformation_model, patch_shape, transform,
+                                      eps)
+
+        # pre-compute
+        self._precompute()
+
+    def _precompute(self):
+        # compute model's gradient
+        nabla_a = self.interface.gradient(self.template)
+
+        # compute warp jacobian
+        ds_dp = self.interface.ds_dp()
+
+        # compute shape hessian
+        self._H_s = self.interface.H_s()
+
+        # compute appearance jacobian
+        j = self.interface.steepest_descent_images(nabla_a, ds_dp)
+
+        # transposed jacobian and covariance dot product
+        self._ja = self.interface.ja(j, self.appearance_model[1])
+
+        # compute hessian
+        self._h = self._ja.dot(j) + self._H_s
+
+    def _algorithm_str(self):
+        return 'Inverse'
+
+    def run(self, image, initial_shape, gt_shape=None, max_iters=20):
+        # initialize transform
+        self.transform.set_target(initial_shape)
+        shape_parameters = [self.transform.as_vector()]
+
+        for _ in xrange(max_iters):
+
+            # compute warped image with current weights
+            i = self.interface.warp(image)
+
+            # vectorize appearance
+            vec_i = self.interface.vectorize(i)
+
+            # compute error image
+            e = vec_i - self.appearance_model[0]
+
+            # compute gauss-newton parameter updates
+            dp = self.interface.solve(self._h, self._ja, e, self._H_s,
+                                      shape_parameters[-1], False)
+
+            # update transform
+            target = self.transform.target
+            self.transform.from_vector_inplace(self.transform.as_vector() - dp)
             shape_parameters.append(self.transform.as_vector())
 
             # test convergence

@@ -1,12 +1,12 @@
 from __future__ import division
 import numpy as np
 
-from hdf5able import HDF5able, SerializableCallable
+from serializablecallable import SerializableCallable
 from menpofit.base import DeformableModel
 from menpo.shape import PointTree
 
 
-class APS(DeformableModel, HDF5able):
+class APS(DeformableModel):
     """
     """
     def __init__(self, shape_models, deformation_models, appearance_models,
@@ -23,21 +23,26 @@ class APS(DeformableModel, HDF5able):
         self.downscale = downscale
         self.scaled_shape_models = scaled_shape_models
 
-    def h5_dict_to_serializable_dict(self):
-        """
-        """
-        import menpo.feature
+    def __getstate__(self):
+        import menpo.feature as menpo_feature
         d = self.__dict__.copy()
 
         features = d.pop('features')
         if self.pyramid_on_features:
             # features is a single callable
-            d['features'] = SerializableCallable(features, [menpo.feature])
+            d['features'] = SerializableCallable(features, [menpo_feature])
         else:
             # features is a list of callables
-            d['features'] = [SerializableCallable(f, [menpo.feature])
+            d['features'] = [SerializableCallable(f, [menpo_feature])
                              for f in features]
         return d
+
+    def __setstate__(self, state):
+        try:
+            state['features'] = state['features'].callable
+        except AttributeError:
+            state['features'] = [f.callable for f in state['features']]
+        self.__dict__.update(state)
 
     @property
     def n_levels(self):
@@ -97,4 +102,4 @@ class APS(DeformableModel, HDF5able):
     def __str__(self):
         r"""
         """
-        return self._str_title()
+        return self._str_title

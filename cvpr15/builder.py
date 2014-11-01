@@ -2,6 +2,7 @@ from __future__ import division
 import numpy as np
 from scipy.misc import comb as nchoosek
 from scipy.stats import multivariate_normal
+from scipy.sparse import block_diag
 
 from menpofit.builder import (DeformableModelBuilder, build_shape_model,
                               normalization_wrt_reference_shape)
@@ -10,6 +11,7 @@ from menpofit import checks
 from menpo.visualize import print_dynamic, progress_bar_str
 from menpo.feature import igo
 from menpo.shape import PointTree, Tree, UndirectedGraph
+from menpo.image import Image
 
 from .utils import build_patches_image, vectorize_patches_image
 
@@ -344,15 +346,14 @@ def _build_appearance_model(all_patches_array, n_points, patch_shape,
     app_mean = np.mean(all_patches_array, axis=1)
 
     # appearance vector and patch vector lengths
-    app_len = all_patches_array.shape[0]
     patch_len = np.prod(patch_shape) * n_channels
 
     # check n_appearance_parameters
     if n_appearance_parameters is None:
         n_appearance_parameters = patch_len
 
-    # compute covariance
-    app_cov = np.zeros((app_len, app_len))
+    # compute covariance matrix for each patch
+    all_cov = []
     for e in range(n_points):
         # print progress
         if verbose:
@@ -364,12 +365,14 @@ def _build_appearance_model(all_patches_array, n_points, patch_shape,
         # find indices in target covariance matrix
         i_from = e * patch_len
         i_to = (e + 1) * patch_len
+
         # compute and store covariance
         cov_mat = np.cov(all_patches_array[i_from:i_to, :])
         s, v, d = np.linalg.svd(cov_mat)
         s = s[:, :n_appearance_parameters]
         v = v[:n_appearance_parameters]
         d = d[:n_appearance_parameters, :]
-        app_cov[i_from:i_to, i_from:i_to] = s.dot(np.diag(1/v)).dot(d)
+        all_cov.append(s.dot(np.diag(1/v)).dot(d))
 
-    return app_mean, app_cov
+    # create final sparse covariance matrix
+    return app_mean, block_diag(all_cov).tocsr()
