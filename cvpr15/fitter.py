@@ -3,7 +3,7 @@ import numpy as np
 
 from menpofit.fitter import MultilevelFitter
 from menpofit.fittingresult import MultilevelFittingResult
-from menpofit.transform.modeldriven import OrthoPDM
+from menpofit.transform.modeldriven import OrthoPDM, PDM
 from menpofit.transform.homogeneous import DifferentiableAlignmentSimilarity
 from menpo.transform.homogeneous import Scale
 
@@ -31,6 +31,12 @@ class APSFitter(MultilevelFitter):
         r"""
         """
         return self.aps.downscale
+
+    @property
+    def use_procrustes(self):
+        r"""
+        """
+        return self.aps.use_procrustes
 
     def _create_fitting_result(self, image, fitting_results, affine_correction,
                                gt_shape=None):
@@ -82,20 +88,16 @@ class APSFitter(MultilevelFitter):
 
 class LucasKanadeAPSFitter(APSFitter):
 
-    def __init__(self, aps, algorithm=Forward, md_transform=OrthoPDM,
-                 n_shape=None, **kwargs):
+    def __init__(self, aps, algorithm=Forward, n_shape=None, **kwargs):
         super(LucasKanadeAPSFitter, self).__init__(aps)
-        self._set_up(algorithm=algorithm, md_transform=md_transform,
-                     n_shape=n_shape, **kwargs)
+        self._set_up(algorithm=algorithm, n_shape=n_shape, **kwargs)
 
     def __str__(self):
         r"""
         """
         return 'Gauss-Newton APS ' + self._fitters[0]._algorithm_str()
 
-    def _set_up(self, algorithm=Forward, md_transform=OrthoPDM,
-                global_transform=DifferentiableAlignmentSimilarity,
-                n_shape=None, **kwargs):
+    def _set_up(self, algorithm=Forward, n_shape=None, **kwargs):
         r"""
         """
         # check n_shape parameter
@@ -118,6 +120,10 @@ class LucasKanadeAPSFitter(APSFitter):
         for j, (am, sm, dm) in enumerate(zip(self.aps.appearance_models,
                                          self.aps.shape_models,
                                          self.aps.deformation_models)):
-            pdm = OrthoPDM(sm, global_transform)
+            if self.use_procrustes:
+                pdm = OrthoPDM(sm, DifferentiableAlignmentSimilarity)
+            else:
+                pdm = PDM(sm)
             self._fitters.append(algorithm(APSInterface, am, dm,
-                                           self.aps.patch_shape, pdm, **kwargs))
+                                           self.aps.patch_shape, pdm,
+                                           self.use_procrustes, **kwargs))

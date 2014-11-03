@@ -11,7 +11,8 @@ class APS(DeformableModel):
     """
     def __init__(self, shape_models, deformation_models, appearance_models,
                  n_training_images, tree, patch_shape, features,
-                 reference_shape, downscale, scaled_shape_models):
+                 reference_shape, downscale, scaled_shape_models,
+                 use_procrustes):
         DeformableModel.__init__(self, features)
         self.n_training_images = n_training_images
         self.shape_models = shape_models
@@ -22,6 +23,7 @@ class APS(DeformableModel):
         self.reference_shape = reference_shape
         self.downscale = downscale
         self.scaled_shape_models = scaled_shape_models
+        self.use_procrustes = use_procrustes
 
     def __getstate__(self):
         import menpo.feature as menpo_feature

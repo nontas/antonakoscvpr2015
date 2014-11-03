@@ -97,7 +97,7 @@ class APSInterface(object):
         return sdi.reshape((-1, sdi.shape[3]))
 
     def ja(self, j, S):
-        # compute the dot product between the apperance jacobian and the
+        # compute the dot product between the appearance jacobian and the
         # covariance matrix
         # j: (n_parts * w * h * n_channels) x n_params
         # S: (n_parts * w * h * n_channels) x (n_parts * w * h * n_channels)
@@ -114,7 +114,12 @@ class APSInterface(object):
         h_s: shape hessian (H_s)
         p: current shape parameters
         """
-        b = ja.dot(e) + h_s.dot(p)
+        if self.algorithm.use_procrustes:
+            tmp_p = p.copy()
+            tmp_p[0:4] = 0.
+            b = ja.dot(e) + h_s.dot(tmp_p)
+        else:
+            b = ja.dot(e) + h_s.dot(p)
         if neg_sign:
             dp = -np.linalg.solve(h, b)
         else:
@@ -132,10 +137,11 @@ class APSAlgorithm(object):
     __metaclass__ = abc.ABCMeta
 
     def __init__(self, aps_interface, appearance_model, deformation_model,
-                 patch_shape, transform, eps=10**-5):
+                 patch_shape, transform, use_procrustes, eps=10**-5):
         self.appearance_model = appearance_model
         self.deformation_model = deformation_model
         self.patch_shape = patch_shape
+        self.use_procrustes = use_procrustes
         n_points = deformation_model.shape[0] / 2
         self.template = Image(np.reshape(appearance_model[0],
                                          (n_points, patch_shape[0],

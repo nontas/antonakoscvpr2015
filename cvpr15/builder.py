@@ -4,14 +4,15 @@ from scipy.misc import comb as nchoosek
 from scipy.stats import multivariate_normal
 from scipy.sparse import block_diag
 
-from menpofit.builder import (DeformableModelBuilder, build_shape_model,
+from menpofit.builder import (DeformableModelBuilder,
                               normalization_wrt_reference_shape)
 from menpofit.base import create_pyramid
 from menpofit import checks
 from menpo.visualize import print_dynamic, progress_bar_str
 from menpo.feature import igo
 from menpo.shape import PointTree, Tree, UndirectedGraph
-from menpo.image import Image
+from menpo.transform import Translation, GeneralizedProcrustesAnalysis
+from menpo.model import PCAModel
 
 from .utils import build_patches_image, vectorize_patches_image
 
@@ -19,7 +20,7 @@ from .utils import build_patches_image, vectorize_patches_image
 class APSBuilder(DeformableModelBuilder):
     def __init__(self, adjacency_array=None, root_vertex=0, features=igo,
                  patch_shape=(16, 16), normalization_diagonal=None, n_levels=3,
-                 downscale=2, scaled_shape_models=True,
+                 downscale=2, scaled_shape_models=True, use_procrustes=True,
                  max_shape_components=None, n_appearance_parameters=None):
         # check parameters
         checks.check_n_levels(n_levels)
@@ -44,6 +45,7 @@ class APSBuilder(DeformableModelBuilder):
         self.scaled_shape_models = scaled_shape_models
         self.max_shape_components = max_shape_components
         self.n_appearance_parameters = n_appearance_parameters
+        self.use_procrustes = use_procrustes
 
     def build(self, images, group=None, label=None, verbose=False):
         # compute reference_shape and normalize images size
@@ -109,14 +111,17 @@ class APSBuilder(DeformableModelBuilder):
                 else:
                     train_shapes = original_shapes
 
-            # train shape model and find reference frame
+            # apply procrustes if asked
+            if self.use_procrustes:
+                if verbose:
+                    print_dynamic('{}Procrustes analysis'.format(level_str))
+                train_shapes = _procrustes_analysis(train_shapes)
+
+            # train shape model
             if verbose:
                 print_dynamic('{}Building shape model'.format(level_str))
-            shape_model = build_shape_model(
-                train_shapes, self.max_shape_components[rj])
-
-            # add shape model to the list
-            shape_models.append(shape_model)
+            shape_models.append(_build_shape_model(
+                train_shapes, self.max_shape_components[rj]))
 
             # compute relative locations from all shapes
             relative_locations = _get_relative_locations(
@@ -159,7 +164,7 @@ class APSBuilder(DeformableModelBuilder):
         return APS(shape_models, deformation_models, appearance_models,
                    n_training_images, self.tree, self.patch_shape,
                    self.features, self.reference_shape, self.downscale,
-                   self.scaled_shape_models)
+                   self.scaled_shape_models, self.use_procrustes)
 
 
 def _warp_images(images, group, label, patch_shape, level_str, verbose):
@@ -208,10 +213,11 @@ def _get_relative_locations(shapes, tree, level_str, verbose):
     for c, pt in enumerate(point_trees):
         # print progress
         if verbose:
-            print_dynamic('{}Computing relative locations from shapes - {}'.format(
-                level_str,
-                progress_bar_str(float(c + 1) / len(point_trees),
-                                 show_bar=False)))
+            print_dynamic('{}Computing relative locations from '
+                          'shapes - {}'.format(
+                          level_str,
+                          progress_bar_str(float(c + 1) / len(point_trees),
+                                           show_bar=False)))
 
         # get relative locations from this shape
         rl = pt.relative_locations()
@@ -376,3 +382,39 @@ def _build_appearance_model(all_patches_array, n_points, patch_shape,
 
     # create final sparse covariance matrix
     return app_mean, block_diag(all_cov).tocsr()
+
+
+def _procrustes_analysis(shapes):
+    # centralize shapes
+    centered_shapes = [Translation(-s.centre()).apply(s) for s in shapes]
+    # align centralized shape using Procrustes Analysis
+    gpa = GeneralizedProcrustesAnalysis(centered_shapes)
+    return [s.aligned_source() for s in gpa.transforms]
+
+
+def _build_shape_model(shapes, max_components):
+    r"""
+    Builds a shape model given a set of shapes.
+
+    Parameters
+    ----------
+    shapes: list of :map:`PointCloud`
+        The set of shapes from which to build the model.
+    max_components: None or int or float
+        Specifies the number of components of the trained shape model.
+        If int, it specifies the exact number of components to be retained.
+        If float, it specifies the percentage of variance to be retained.
+        If None, all the available components are kept (100% of variance).
+
+    Returns
+    -------
+    shape_model: :class:`menpo.model.pca`
+        The PCA shape model.
+    """
+    # build shape model
+    shape_model = PCAModel(shapes)
+    if max_components is not None:
+        # trim shape model if required
+        shape_model.trim_components(max_components)
+
+    return shape_model
