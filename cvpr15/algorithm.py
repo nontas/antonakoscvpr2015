@@ -4,6 +4,7 @@ import numpy as np
 
 from menpofit.fittingresult import SemiParametricFittingResult
 from menpo.image import Image
+from menpofit.transform.modeldriven import OrthoPDM
 from .utils import build_patches_image, vectorize_patches_image
 
 
@@ -114,12 +115,14 @@ class APSInterface(object):
         h_s: shape hessian (H_s)
         p: current shape parameters
         """
-        if self.algorithm.use_procrustes:
-            tmp_p = p.copy()
-            tmp_p[0:4] = 0.
-            b = ja.dot(e) + h_s.dot(tmp_p)
-        else:
-            b = ja.dot(e) + h_s.dot(p)
+        b = ja.dot(e)
+        if h_s is not None:
+            if isinstance(self.algorithm.transform, OrthoPDM):
+                tmp_p = p.copy()
+                tmp_p[0:4] = 0.
+                b = b + h_s.dot(tmp_p)
+            else:
+                b = b + h_s.dot(p)
         if neg_sign:
             dp = -np.linalg.solve(h, b)
         else:
@@ -137,16 +140,16 @@ class APSAlgorithm(object):
     __metaclass__ = abc.ABCMeta
 
     def __init__(self, aps_interface, appearance_model, deformation_model,
-                 patch_shape, transform, use_procrustes, eps=10**-5):
+                 patch_shape, transform, use_deformation, eps=10**-5):
         self.appearance_model = appearance_model
         self.deformation_model = deformation_model
         self.patch_shape = patch_shape
-        self.use_procrustes = use_procrustes
         n_points = deformation_model.shape[0] / 2
         self.template = Image(np.reshape(appearance_model[0],
                                          (n_points, patch_shape[0],
                                           patch_shape[1], -1)))
         self.transform = transform
+        self.use_deformation = use_deformation
         self.eps = eps
 
         # check if provided svd or covariance matrix
@@ -181,7 +184,9 @@ class Forward(APSAlgorithm):
         self._ds_dp = self.interface.ds_dp()
 
         # compute shape hessian
-        self._H_s = self.interface.H_s()
+        self._H_s = None
+        if self.use_deformation:
+            self._H_s = self.interface.H_s()
 
     def _algorithm_str(self):
         return 'Forward'
@@ -212,11 +217,13 @@ class Forward(APSAlgorithm):
             ja = self.interface.ja(j, self.appearance_model[1])
 
             # compute hessian
-            h = ja.dot(j) + self._H_s
+            h = ja.dot(j)
+            if self.use_deformation:
+                h = h + self._H_s
 
             # compute gauss-newton parameter updates
-            dp = self.interface.solve(h, ja, e, self._H_s, shape_parameters[-1],
-                                      True)
+            dp = self.interface.solve(h, ja, e, self._H_s,
+                                      shape_parameters[-1], True)
 
             # update transform
             target = self.transform.target
@@ -253,9 +260,6 @@ class Inverse(APSAlgorithm):
         # compute warp jacobian
         ds_dp = self.interface.ds_dp()
 
-        # compute shape hessian
-        self._H_s = self.interface.H_s()
-
         # compute appearance jacobian
         j = self.interface.steepest_descent_images(nabla_a, ds_dp)
 
@@ -263,7 +267,11 @@ class Inverse(APSAlgorithm):
         self._ja = self.interface.ja(j, self.appearance_model[1])
 
         # compute hessian
-        self._h = self._ja.dot(j) + self._H_s
+        self._H_s = None
+        self._h = self._ja.dot(j)
+        if self.use_deformation:
+            self._H_s = self.interface.H_s()
+            self._h = self._h + self._H_s
 
     def _algorithm_str(self):
         return 'Inverse'
