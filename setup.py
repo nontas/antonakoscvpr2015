@@ -1,29 +1,20 @@
-import os
 from setuptools import setup, find_packages
+import numpy as np
 
-on_rtd = os.environ.get('READTHEDOCS', None) == 'True'
+include_dirs = [np.get_include()]
 
-if on_rtd:
-    install_requires = []
-    ext_modules = []
-    include_dirs = []
-    cython_exts = []
-else:
-    import numpy as np
+requirements = ['menpo>=0.3.0',
+                'menpofast>=0.0.1',
+                'menpofit>=0.0.1',
+                'scikit-image>=0.10.1']
 
-    # ---- C/C++ EXTENSIONS ---- #
-    include_dirs = [np.get_include()]
-
-    install_requires = ['menpo>=0.3.0',
-                        'scikit-image>=0.10.1',
-                        'menpofit']
-
-setup(name='cvpr15',
-      version='0.0',
-      description='CVPR 2015',
+setup(name='antonakoscvpr15',
+      version='0.0.1',
+      description='Repository containing the code of the paper: A Unified '
+                  'Framework for Gauss-Newton Deformable Model Fitting',
       author='Epameinondas Antonakos',
       author_email='antonakosn@gmail.com',
       include_dirs=include_dirs,
       packages=find_packages(),
-      install_requires=install_requires
+      install_requires=requirements
 )
