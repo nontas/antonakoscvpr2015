@@ -4,22 +4,25 @@ from scipy.misc import comb as nchoosek
 from scipy.stats import multivariate_normal
 from scipy.sparse import block_diag
 
-from menpofit.builder import (DeformableModelBuilder, build_shape_model,
-                              normalization_wrt_reference_shape)
-from menpofit.base import create_pyramid
-from menpofit import checks
 from menpo.visualize import print_dynamic, progress_bar_str
 from menpo.feature import igo
 from menpo.shape import PointTree, Tree, UndirectedGraph
-from menpo.image import Image
+from menpo.transform import Translation, GeneralizedProcrustesAnalysis
+from menpo.model import PCAModel
 
-from .utils import build_patches_image, vectorize_patches_image
+from menpofast.utils import build_parts_image
+
+from menpofit.builder import (DeformableModelBuilder,
+                              normalization_wrt_reference_shape)
+from menpofit.base import create_pyramid
+from menpofit import checks
 
 
 class APSBuilder(DeformableModelBuilder):
-    def __init__(self, adjacency_array=None, root_vertex=0, features=igo,
-                 patch_shape=(16, 16), normalization_diagonal=None, n_levels=3,
-                 downscale=2, scaled_shape_models=True,
+    def __init__(self, adjacency_array=None, root_vertex=0,
+                 patch_shape=(16, 16), features=igo, normalize_patches=False,
+                 normalization_diagonal=None, n_levels=3, downscale=2,
+                 scaled_shape_models=True, use_procrustes=True,
                  max_shape_components=None, n_appearance_parameters=None):
         # check parameters
         checks.check_n_levels(n_levels)
@@ -36,14 +39,16 @@ class APSBuilder(DeformableModelBuilder):
 
         # store parameters
         self.root_vertex = root_vertex
-        self.features = features
         self.patch_shape = patch_shape
+        self.features = features
+        self.normalize_patches = normalize_patches
         self.normalization_diagonal = normalization_diagonal
         self.n_levels = n_levels
         self.downscale = downscale
         self.scaled_shape_models = scaled_shape_models
         self.max_shape_components = max_shape_components
         self.n_appearance_parameters = n_appearance_parameters
+        self.use_procrustes = use_procrustes
 
     def build(self, images, group=None, label=None, verbose=False):
         # compute reference_shape and normalize images size
@@ -109,14 +114,17 @@ class APSBuilder(DeformableModelBuilder):
                 else:
                     train_shapes = original_shapes
 
-            # train shape model and find reference frame
+            # apply procrustes if asked
+            if self.use_procrustes:
+                if verbose:
+                    print_dynamic('{}Procrustes analysis'.format(level_str))
+                train_shapes = _procrustes_analysis(train_shapes)
+
+            # train shape model
             if verbose:
                 print_dynamic('{}Building shape model'.format(level_str))
-            shape_model = build_shape_model(
-                train_shapes, self.max_shape_components[rj])
-
-            # add shape model to the list
-            shape_models.append(shape_model)
+            shape_models.append(_build_shape_model(
+                train_shapes, self.max_shape_components[rj]))
 
             # compute relative locations from all shapes
             relative_locations = _get_relative_locations(
@@ -128,8 +136,9 @@ class APSBuilder(DeformableModelBuilder):
 
             # extract patches from all images
             all_patches_array = _warp_images(feature_images, group, label,
-                                             self.patch_shape, level_str,
-                                             verbose)
+                                             self.patch_shape,
+                                             self.normalize_patches,
+                                             level_str, verbose)
 
             # build and add appearance model to the list
             n_points = images[0].landmarks[group][label].n_points
@@ -159,20 +168,22 @@ class APSBuilder(DeformableModelBuilder):
         return APS(shape_models, deformation_models, appearance_models,
                    n_training_images, self.tree, self.patch_shape,
                    self.features, self.reference_shape, self.downscale,
-                   self.scaled_shape_models)
+                   self.scaled_shape_models, self.use_procrustes)
 
 
-def _warp_images(images, group, label, patch_shape, level_str, verbose):
+def _warp_images(images, group, label, patch_shape, normalize, level_str,
+                 verbose):
     r"""
     returns numpy.array of size (68*16*16*36) x n_images
     """
     # find length of each patch and number of points
     n_points = images[0].landmarks[group][label].n_points
-    patches_len = np.prod(patch_shape) * images[0].n_channels * n_points
+    # TODO: introduce support for offsets
+    patches_image_shape = (images[0].n_channels, n_points, 1) + patch_shape
     n_images = len(images)
 
     # initialize the output numpy array
-    all_patches_array = np.empty((patches_len, n_images))
+    all_patches_array = np.empty(patches_image_shape + (n_images,))
 
     # extract parts
     for c, i in enumerate(images):
@@ -184,10 +195,12 @@ def _warp_images(images, group, label, patch_shape, level_str, verbose):
                                  show_bar=False)))
 
         # extract patches from this image
-        patches_image = build_patches_image(i, None, patch_shape)
+        patches_image = build_parts_image(
+            i, i.landmarks[group][label], patch_shape,
+            normalize_parts=normalize)
 
         # store
-        all_patches_array[..., c] = vectorize_patches_image(patches_image)
+        all_patches_array[..., c] = patches_image.pixels
 
     return all_patches_array
 
@@ -343,14 +356,16 @@ def _build_appearance_model(all_patches_array, n_points, patch_shape,
         print_dynamic('{}Training appearance distribution per '
                       'patch'.format(level_str))
     # compute mean appearance vector
-    app_mean = np.mean(all_patches_array, axis=1)
+    app_mean = np.mean(all_patches_array, axis=-1)
 
+    # number of images
+    n_images = all_patches_array.shape[-1]
     # appearance vector and patch vector lengths
     patch_len = np.prod(patch_shape) * n_channels
 
     # check n_appearance_parameters
     if n_appearance_parameters is None:
-        n_appearance_parameters = patch_len
+        n_appearance_parameters = np.minimum(n_images, patch_len)
 
     # compute covariance matrix for each patch
     all_cov = []
@@ -362,12 +377,11 @@ def _build_appearance_model(all_patches_array, n_points, patch_shape,
                           level_str,
                           progress_bar_str(float(e + 1) / n_points,
                                            show_bar=False)))
-        # find indices in target covariance matrix
-        i_from = e * patch_len
-        i_to = (e + 1) * patch_len
+        # select patches and vectorize
+        patches_vector = all_patches_array[:, e, ...].reshape(-1, n_images)
 
         # compute and store covariance
-        cov_mat = np.cov(all_patches_array[i_from:i_to, :])
+        cov_mat = np.cov(patches_vector)
         s, v, d = np.linalg.svd(cov_mat)
         s = s[:, :n_appearance_parameters]
         v = v[:n_appearance_parameters]
@@ -376,3 +390,37 @@ def _build_appearance_model(all_patches_array, n_points, patch_shape,
 
     # create final sparse covariance matrix
     return app_mean, block_diag(all_cov).tocsr()
+
+
+def _procrustes_analysis(shapes):
+    # centralize shapes
+    centered_shapes = [Translation(-s.centre()).apply(s) for s in shapes]
+    # align centralized shape using Procrustes Analysis
+    gpa = GeneralizedProcrustesAnalysis(centered_shapes)
+    return [s.aligned_source() for s in gpa.transforms]
+
+
+def _build_shape_model(shapes, max_components):
+    r"""
+    Builds a shape model given a set of shapes.
+    Parameters
+    ----------
+    shapes: list of :map:`PointCloud`
+        The set of shapes from which to build the model.
+    max_components: None or int or float
+        Specifies the number of components of the trained shape model.
+        If int, it specifies the exact number of components to be retained.
+        If float, it specifies the percentage of variance to be retained.
+        If None, all the available components are kept (100% of variance).
+    Returns
+    -------
+    shape_model: :class:`menpo.model.pca`
+        The PCA shape model.
+    """
+    # build shape model
+    shape_model = PCAModel(shapes)
+    if max_components is not None:
+        # trim shape model if required
+        shape_model.trim_components(max_components)
+
+    return shape_model
