@@ -15,11 +15,12 @@ else:
     include_dirs = [np.get_include()]
 
     install_requires = ['menpo>=0.3.0',
-                        'scikit-image>=0.10.1',
-                        'menpofit']
+                        'menpofast>=0.0.1',
+                        'menpofit>=0.0.1',
+                        'scikit-image>=0.10.1']
 
-setup(name='cvpr15',
-      version='0.0',
+setup(name='antonakoscvpr15',
+      version='0.0.1',
       description='CVPR 2015',
       author='Epameinondas Antonakos',
       author_email='antonakosn@gmail.com',
