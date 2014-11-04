@@ -19,9 +19,10 @@ from .utils import build_patches_image, vectorize_patches_image
 
 class APSBuilder(DeformableModelBuilder):
     def __init__(self, adjacency_array=None, root_vertex=0, features=igo,
-                 patch_shape=(16, 16), normalization_diagonal=None, n_levels=3,
+                 patch_shape=(17, 17), normalization_diagonal=None, n_levels=2,
                  downscale=2, scaled_shape_models=True, use_procrustes=True,
-                 max_shape_components=None, n_appearance_parameters=None):
+                 max_shape_components=None, n_appearance_parameters=None,
+                 gaussian_per_patch=True):
         # check parameters
         checks.check_n_levels(n_levels)
         checks.check_downscale(downscale)
@@ -29,6 +30,9 @@ class APSBuilder(DeformableModelBuilder):
         max_shape_components = checks.check_max_components(
             max_shape_components, n_levels, 'max_shape_components')
         features = checks.check_features(features, n_levels)
+        n_appearance_parameters = _check_n_parameters(n_appearance_parameters,
+                                                      n_levels,
+                                                      'n_appearance_parameters')
 
         # flag whether to create MST
         self.tree_is_mst = adjacency_array is None
@@ -46,6 +50,7 @@ class APSBuilder(DeformableModelBuilder):
         self.max_shape_components = max_shape_components
         self.n_appearance_parameters = n_appearance_parameters
         self.use_procrustes = use_procrustes
+        self.gaussian_per_patch = gaussian_per_patch
 
     def build(self, images, group=None, label=None, verbose=False):
         # compute reference_shape and normalize images size
@@ -132,16 +137,22 @@ class APSBuilder(DeformableModelBuilder):
                 self.tree, relative_locations, level_str, verbose))
 
             # extract patches from all images
-            all_patches_array = _warp_images(feature_images, group, label,
-                                             self.patch_shape, level_str,
-                                             verbose)
+            as_vectors = self.gaussian_per_patch
+            all_patches = _warp_images(feature_images, group, label,
+                                       self.patch_shape, as_vectors, level_str,
+                                       verbose)
 
             # build and add appearance model to the list
-            n_points = images[0].landmarks[group][label].n_points
-            n_channels = feature_images[0].n_channels
-            appearance_models.append(_build_appearance_model(
-                all_patches_array, n_points, self.patch_shape, n_channels,
-                self.n_appearance_parameters, level_str, verbose))
+            if self.gaussian_per_patch:
+                n_points = images[0].landmarks[group][label].n_points
+                n_channels = feature_images[0].n_channels
+                appearance_models.append(_build_appearance_model_per_patch(
+                    all_patches, n_points, self.patch_shape, n_channels,
+                    self.n_appearance_parameters[rj], level_str, verbose))
+            else:
+                appearance_models.append(_build_appearance_model_full(
+                    all_patches, self.n_appearance_parameters[rj],
+                    level_str, verbose))
 
             if verbose:
                 print_dynamic('{}Done\n'.format(level_str))
@@ -167,7 +178,8 @@ class APSBuilder(DeformableModelBuilder):
                    self.scaled_shape_models, self.use_procrustes)
 
 
-def _warp_images(images, group, label, patch_shape, level_str, verbose):
+def _warp_images(images, group, label, patch_shape, as_vectors, level_str,
+                 verbose):
     r"""
     returns numpy.array of size (68*16*16*36) x n_images
     """
@@ -176,8 +188,11 @@ def _warp_images(images, group, label, patch_shape, level_str, verbose):
     patches_len = np.prod(patch_shape) * images[0].n_channels * n_points
     n_images = len(images)
 
-    # initialize the output numpy array
-    all_patches_array = np.empty((patches_len, n_images))
+    # initialize the output
+    if as_vectors:
+        all_patches = np.empty((patches_len, n_images))
+    else:
+        all_patches = []
 
     # extract parts
     for c, i in enumerate(images):
@@ -192,9 +207,12 @@ def _warp_images(images, group, label, patch_shape, level_str, verbose):
         patches_image = build_patches_image(i, None, patch_shape)
 
         # store
-        all_patches_array[..., c] = vectorize_patches_image(patches_image)
+        if as_vectors:
+            all_patches[..., c] = vectorize_patches_image(patches_image)
+        else:
+            all_patches.append(patches_image)
 
-    return all_patches_array
+    return all_patches
 
 
 def _get_relative_locations(shapes, tree, level_str, verbose):
@@ -341,9 +359,9 @@ def _build_deformation_model(tree, relative_locations, level_str, verbose):
     return def_cov
 
 
-def _build_appearance_model(all_patches_array, n_points, patch_shape,
-                            n_channels, n_appearance_parameters, level_str,
-                            verbose):
+def _build_appearance_model_per_patch(all_patches_array, n_points, patch_shape,
+                                      n_channels, n_appearance_parameters,
+                                      level_str, verbose):
     # build appearance model
     if verbose:
         print_dynamic('{}Training appearance distribution per '
@@ -353,10 +371,6 @@ def _build_appearance_model(all_patches_array, n_points, patch_shape,
 
     # appearance vector and patch vector lengths
     patch_len = np.prod(patch_shape) * n_channels
-
-    # check n_appearance_parameters
-    if n_appearance_parameters is None:
-        n_appearance_parameters = patch_len
 
     # compute covariance matrix for each patch
     all_cov = []
@@ -374,14 +388,39 @@ def _build_appearance_model(all_patches_array, n_points, patch_shape,
 
         # compute and store covariance
         cov_mat = np.cov(all_patches_array[i_from:i_to, :])
-        s, v, d = np.linalg.svd(cov_mat)
-        s = s[:, :n_appearance_parameters]
-        v = v[:n_appearance_parameters]
-        d = d[:n_appearance_parameters, :]
-        all_cov.append(s.dot(np.diag(1/v)).dot(d))
+        if n_appearance_parameters is None:
+            all_cov.append(np.linalg.inv(cov_mat))
+        else:
+            s, v, d = np.linalg.svd(cov_mat)
+            s = s[:, :n_appearance_parameters]
+            v = v[:n_appearance_parameters]
+            d = d[:n_appearance_parameters, :]
+            all_cov.append(s.dot(np.diag(1/v)).dot(d))
 
     # create final sparse covariance matrix
     return app_mean, block_diag(all_cov).tocsr()
+
+
+def _build_appearance_model_full(all_patches, n_appearance_parameters,
+                                 level_str, verbose):
+    # build appearance model
+    if verbose:
+        print_dynamic('{}Training appearance distribution'.format(level_str))
+
+    # apply pca
+    appearance_model = PCAModel(all_patches)
+
+    # trim components
+    if n_appearance_parameters is not None:
+        appearance_model.trim_components(n_appearance_parameters)
+
+    # get mean appearance vector
+    app_mean = appearance_model.mean().as_vector()
+
+    # compute covariance matrix
+    app_cov = appearance_model.components.T.dot(np.diag(1/appearance_model.eigenvalues)).dot(appearance_model.components)
+
+    return app_mean, app_cov
 
 
 def _procrustes_analysis(shapes):
@@ -418,3 +457,18 @@ def _build_shape_model(shapes, max_components):
         shape_model.trim_components(max_components)
 
     return shape_model
+
+
+def _check_n_parameters(n_params, n_levels, n_params_str):
+    if n_params is not None:
+        if type(n_params) is int or type(n_params) is float:
+            n_params = [n_params] * n_levels
+        elif len(n_params) == 1 and n_levels > 1:
+            n_params = n_params * n_levels
+        elif len(n_params) == n_levels:
+            pass
+        else:
+            raise ValueError('{} can be an integer or a float or None '
+                             'or a list containing 1 or {} of '
+                             'those'.format(n_params_str, n_levels))
+    return n_params
