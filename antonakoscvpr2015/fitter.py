@@ -5,7 +5,9 @@ from menpofit.fitter import MultilevelFitter
 from menpofit.fittingresult import MultilevelFittingResult
 from menpofit.transform.modeldriven import PDM, OrthoPDM
 from menpofit.transform.homogeneous import DifferentiableAlignmentSimilarity
-from menpo.transform.homogeneous import Scale
+from menpo.transform.homogeneous import Scale, AlignmentAffine
+
+from menpofast.utils import convert_to_menpo
 
 from .algorithm import APSInterface, Forward
 
@@ -37,6 +39,58 @@ class APSFitter(MultilevelFitter):
         r"""
         """
         return self.aps.use_procrustes
+
+    def fit(self, image, initial_shape, max_iters=50, gt_shape=None,
+            **kwargs):
+        r"""
+        Fits the multilevel fitter to an image.
+        Parameters
+        -----------
+        image: :map:`Image` or subclass
+            The image to be fitted.
+        initial_shape: :map:`PointCloud`
+            The initial shape estimate from which the fitting procedure
+            will start.
+        max_iters: `int` or `list` of `int`, optional
+            The maximum number of iterations.
+            If `int`, specifies the overall maximum number of iterations.
+            If `list` of `int`, specifies the maximum number of iterations per
+            level.
+        gt_shape: :map:`PointCloud`
+            The ground truth shape associated to the image.
+        **kwargs:
+            Additional keyword arguments that can be passed to specific
+            implementations of ``_fit`` method.
+        Returns
+        -------
+        multi_fitting_result: :map:`MultilevelFittingResult`
+            The multilevel fitting result containing the result of
+            fitting procedure.
+        """
+        # generate the list of images to be fitted
+        images, initial_shapes, gt_shapes = self._prepare_image(
+            image, initial_shape, gt_shape=gt_shape)
+
+        # detach added landmarks from image
+        del image.landmarks['initial_shape']
+        if gt_shape:
+            del image.landmarks['gt_shape']
+
+        # work out the affine transform between the initial shape of the
+        # highest pyramidal level and the initial shape of the original image
+        affine_correction = AlignmentAffine(initial_shapes[-1], initial_shape)
+
+        # run multilevel fitting
+        fitting_results = self._fit(images, initial_shapes[0],
+                                    max_iters=max_iters,
+                                    gt_shapes=gt_shapes, **kwargs)
+
+        # build multilevel fitting result
+        multi_fitting_result = self._create_fitting_result(
+            convert_to_menpo(image), fitting_results, affine_correction,
+            gt_shape=gt_shape)
+
+        return multi_fitting_result
 
     def _create_fitting_result(self, image, fitting_results, affine_correction,
                                gt_shape=None):
@@ -97,9 +151,7 @@ class LucasKanadeAPSFitter(APSFitter):
         """
         return 'Gauss-Newton APS ' + self._fitters[0]._algorithm_str()
 
-    def _set_up(self, algorithm=Forward, md_transform=OrthoPDM,
-                global_transform=DifferentiableAlignmentSimilarity,
-                n_shape=None, **kwargs):
+    def _set_up(self, algorithm=Forward, n_shape=None, **kwargs):
         r"""
         """
         # check n_shape parameter

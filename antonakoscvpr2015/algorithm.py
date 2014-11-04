@@ -6,7 +6,7 @@ from menpofit.fittingresult import SemiParametricFittingResult
 
 from menpofast.image import Image
 from menpofast.feature import gradient as fast_gradient
-from menpofast.utils import build_parts_image
+from menpofast.utils import build_parts_image, convert_to_menpo
 
 
 class APSInterface(object):
@@ -66,7 +66,7 @@ class APSInterface(object):
     def gradient(self, image):
         r"""
         Returns the gradients of the patches
-        n_dims x n_channels x n_points x (w x h)
+        n_dims x n_parts x n_channels x  (w x h)
         """
         g = fast_gradient(image.pixels.reshape(
             (-1,) + self.algorithm.patch_shape))
@@ -74,46 +74,46 @@ class APSInterface(object):
 
     def steepest_descent_images(self, gradient, ds_dp):
         # reshape gradient
-        # gradient: n_dims x n_channels x n_parts x offsets x (h x w)
+        # gradient: n_dims x n_parts x offsets x n_ch x (h x w)
         gradient = gradient[self.gradient_mask].reshape(
             gradient.shape[:-2] + (-1,))
         # compute steepest descent images
-        # gradient: n_dims x n_ch x n_parts x offsets x (h x w)
-        # ds_dp:    n_dims x      x n_parts x                   x n_params
-        # sdi:               n_ch x n_parts x offsets x (h x w) x n_params
+        # gradient: n_dims x n_parts x offsets x n_ch x (h x w)
+        # ds_dp:    n_dims x n_parts x                          x n_params
+        # sdi:               n_parts x offsets x n_ch x (h x w) x n_params
         sdi = 0
-        a = gradient[..., None] * ds_dp[..., None, :, None, None, :]
+        a = gradient[..., None] * ds_dp[..., None, None, None, :]
         for d in a:
             sdi += d
 
         # reshape steepest descent images
-        # sdi: (n_channels x n_parts x w x h) x n_params
+        # sdi: (n_parts x n_offsets x n_ch x w x h) x n_params
         return sdi.reshape((-1, sdi.shape[-1]))
 
     def ja(self, j, S):
         # compute the dot product between the apperance jacobian and the
         # covariance matrix
-        # j: (n_parts * w * h * n_channels) x n_params
-        # S: (n_parts * w * h * n_channels) x (n_parts * w * h * n_channels)
+        # j: (n_parts x n_offsets x n_ch x w x h) x n_params
+        # S: (n_parts x n_offsets x n_ch x w x h) x (n_parts x n_offsets x n_ch x w x h)
         return S.T.dot(j).T
 
-    def solve(self, h, ja, e, h_s, p, neg_sign):
-        r"""
-        Parameters increment
-        dp --> (size: n_s x 1)
-        h: hessian (H = H_a + H_s)
-        ja: (J_a^T * S_a)
-        e: error image
-        sigma_a: appearance covariance (S_a)
-        h_s: shape hessian (H_s)
-        p: current shape parameters
-        """
-        b = ja.dot(e) + h_s.dot(p)
-        if neg_sign:
-            dp = -np.linalg.solve(h, b)
-        else:
-            dp = np.linalg.solve(h, b)
-        return dp
+    # def solve(self, h, ja, e, h_s, p, neg_sign):
+    #     r"""
+    #     Parameters increment
+    #     dp --> (size: n_s x 1)
+    #     h: hessian (H = H_a + H_s)
+    #     ja: (J_a^T * S_a)
+    #     e: error image
+    #     sigma_a: appearance covariance (S_a)
+    #     h_s: shape hessian (H_s)
+    #     p: current shape parameters
+    #     """
+    #     b = ja.dot(e) + h_s.dot(p)
+    #     if neg_sign:
+    #         dp = -np.linalg.solve(h, b)
+    #     else:
+    #         dp = np.linalg.solve(h, b)
+    #     return dp
 
     def fitting_result(self, image, shape_parameters, gt_shape):
         return SemiParametricFittingResult(image, self.algorithm,
@@ -141,12 +141,23 @@ class APSAlgorithm(object):
         # set interface
         self.interface = aps_interface(self, **kwargs)
 
+        # mask appearance model
+        self.Sigma_a = self.appearance_model[1]
+        if len(self.interface.image_vec_mask) < self.Sigma_a.shape[0]:
+            x, y = np.meshgrid(self.interface.image_vec_mask,
+                               self.interface.image_vec_mask)
+            self.Sigma_a = self.Sigma_a[x, y]
+
     @abc.abstractmethod
     def _precompute(self):
         pass
 
     @abc.abstractmethod
     def _algorithm_str(self):
+        pass
+
+    @abc.abstractmethod
+    def run(self, **kwarg):
         pass
 
 
@@ -177,13 +188,19 @@ class Forward(APSAlgorithm):
         self.transform.set_target(initial_shape)
         shape_parameters = [self.transform.as_vector()]
 
+        # masked model mean
+        masked_m = self.template.as_vector()[self.interface.image_vec_mask]
+
         for _ in xrange(max_iters):
 
             # compute warped image with current weights
             i = self.interface.warp(image)
 
+            # masked image
+            masked_i = i.as_vector()[self.interface.image_vec_mask]
+
             # compute error image
-            e = i.as_vector() - self.template.as_vector()
+            e = masked_i - masked_m
 
             # compute image gradient
             nabla_i = self.interface.gradient(i)
@@ -192,7 +209,7 @@ class Forward(APSAlgorithm):
             j = self.interface.steepest_descent_images(nabla_i, self._ds_dp)
 
             # transposed jacobian and covariance dot product
-            ja = self.interface.ja(j, self.appearance_model[1])
+            ja = self.interface.ja(j, self.Sigma_a)
 
             # compute hessian
             h = ja.dot(j) + self._H_s
@@ -232,8 +249,6 @@ class Inverse(APSAlgorithm):
         self._precompute()
 
     def _precompute(self):
-        # compute model's gradient
-        nabla_a = self.interface.gradient(self.template)
 
         # compute warp jacobian
         ds_dp = self.interface.ds_dp()
@@ -241,11 +256,14 @@ class Inverse(APSAlgorithm):
         # compute shape hessian
         self._H_s = self.interface.H_s()
 
+        # compute model's gradient
+        nabla_a = self.interface.gradient(self.template)
+
         # compute appearance jacobian
         j = self.interface.steepest_descent_images(nabla_a, ds_dp)
 
         # transposed jacobian and covariance dot product
-        self._ja = self.interface.ja(j, self.appearance_model[1])
+        self._ja = self.interface.ja(j, self.Sigma_a)
 
         # compute hessian inverse
         h = self._ja.dot(j) + self._H_s
@@ -259,19 +277,25 @@ class Inverse(APSAlgorithm):
         self.transform.set_target(initial_shape)
         shape_parameters = [self.transform.as_vector()]
 
+        # masked model mean
+        masked_m = self.template.as_vector()[self.interface.image_vec_mask]
+
         for _ in xrange(max_iters):
 
-            # compute warped image with current weights
+            # compute warped image
             i = self.interface.warp(image)
 
+            # masked image
+            masked_i = i.as_vector()[self.interface.image_vec_mask]
+
             # compute error image
-            e = i.as_vector() - self.template.as_vector()
+            e = masked_i - masked_m
 
             # compute gauss-newton parameter updates
             p = shape_parameters[-1].copy()
             if self.use_procrustes:
                 p[0:4] = 0
-            dp = self._inv_h.dot(self._ja.dot(e) + self._H_s.dot(p))
+            dp = -self._inv_h.dot(self._ja.dot(e) + self._H_s.dot(p))
 
             # update transform
             target = self.transform.target
@@ -285,5 +309,6 @@ class Inverse(APSAlgorithm):
                 break
 
         # return fitting result
-        return self.interface.fitting_result(image, shape_parameters,
+        return self.interface.fitting_result(convert_to_menpo(image),
+                                             shape_parameters,
                                              gt_shape=gt_shape)

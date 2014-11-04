@@ -179,7 +179,7 @@ def _warp_images(images, group, label, patch_shape, normalize, level_str,
     # find length of each patch and number of points
     n_points = images[0].landmarks[group][label].n_points
     # TODO: introduce support for offsets
-    patches_image_shape = (images[0].n_channels, n_points, 1) + patch_shape
+    patches_image_shape = (n_points, 1, images[0].n_channels) + patch_shape
     n_images = len(images)
 
     # initialize the output numpy array
@@ -378,7 +378,7 @@ def _build_appearance_model(all_patches_array, n_points, patch_shape,
                           progress_bar_str(float(e + 1) / n_points,
                                            show_bar=False)))
         # select patches and vectorize
-        patches_vector = all_patches_array[:, e, ...].reshape(-1, n_images)
+        patches_vector = all_patches_array[e, ...].reshape(-1, n_images)
 
         # compute and store covariance
         cov_mat = np.cov(patches_vector)
