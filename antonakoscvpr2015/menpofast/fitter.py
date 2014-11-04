@@ -1,7 +1,7 @@
 from __future__ import division
 
 import numpy as np
-from menpo.transform.homogeneous import Scale
+from menpo.transform.homogeneous import Scale, AlignmentAffine
 
 from menpofit.fitter import MultilevelFitter
 from menpofit.fittingresult import MultilevelFittingResult
