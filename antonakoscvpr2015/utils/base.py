@@ -3,6 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 
+from menpo.shape import PointTree
+
 
 def pickle_load(path):
     with open(str(path), 'rb') as f:
@@ -57,3 +59,32 @@ def plot_gaussian_ellipse(cov, mean, n_std=2, ax=None, **kwargs):
 
     ax.add_artist(ellip)
     return ellip
+
+
+def plot_deformation_model(aps, level):
+    mean_shape = aps.shape_models[level].mean().points
+    for e in range(aps.tree.n_edges):
+        # find vertices
+        parent = aps.tree.adjacency_array[e, 0]
+        child = aps.tree.adjacency_array[e, 1]
+
+        # relative location mean
+        rel_loc_mean = mean_shape[child, :] - mean_shape[parent, :]
+
+        # relative location cov
+        n_points = aps.deformation_models[0].shape[0] / 2
+        s1 = -aps.deformation_models[level][2*child, 2*parent]
+        s2 = -aps.deformation_models[level][2*child+1, 2*parent+1]
+        s3 = -aps.deformation_models[level][2*child, 2*parent+1]
+        cov_mat = np.linalg.inv(np.array([[s1, s3], [s3, s2]]))
+
+        # plot ellipse
+        plot_gaussian_ellipse(cov_mat, mean_shape[parent, :] + rel_loc_mean,
+                              n_std=2, facecolor='none', edgecolor='r')
+
+    # plot mean shape points
+    aps.shape_models[level].mean().view_on(plt.gcf().number)
+
+    # create and plot edge connections
+    PointTree(mean_shape, aps.tree.adjacency_array,
+              aps.tree.root_vertex).view_on(plt.gcf().number)

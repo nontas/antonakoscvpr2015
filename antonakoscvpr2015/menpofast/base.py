@@ -26,7 +26,7 @@ class APS(DeformableModel):
         self.use_procrustes = use_procrustes
 
     def __getstate__(self):
-        import menpo.feature as menpo_feature
+        import menpofast.feature as menpo_feature
         d = self.__dict__.copy()
 
         features = d.pop('features')
