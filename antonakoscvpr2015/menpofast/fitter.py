@@ -1,11 +1,12 @@
 from __future__ import division
+
 import numpy as np
+from menpo.transform.homogeneous import Scale
 
 from menpofit.fitter import MultilevelFitter
 from menpofit.fittingresult import MultilevelFittingResult
-from menpofit.transform.modeldriven import PDM, OrthoPDM
+from menpofit.transform.modeldriven import OrthoPDM, PDM
 from menpofit.transform.homogeneous import DifferentiableAlignmentSimilarity
-from menpo.transform.homogeneous import Scale, AlignmentAffine
 
 from menpofast.utils import convert_to_menpo
 
@@ -142,16 +143,19 @@ class APSFitter(MultilevelFitter):
 
 class LucasKanadeAPSFitter(APSFitter):
 
-    def __init__(self, aps, algorithm=Forward, n_shape=None, **kwargs):
+    def __init__(self, aps, algorithm=Forward, n_shape=None,
+                 use_deformation=True, **kwargs):
         super(LucasKanadeAPSFitter, self).__init__(aps)
-        self._set_up(algorithm=algorithm, n_shape=n_shape, **kwargs)
+        self._set_up(algorithm=algorithm, n_shape=n_shape,
+                     use_deformation=use_deformation, **kwargs)
 
     def __str__(self):
         r"""
         """
         return 'Gauss-Newton APS ' + self._fitters[0]._algorithm_str()
 
-    def _set_up(self, algorithm=Forward, n_shape=None, **kwargs):
+    def _set_up(self, algorithm=Forward, n_shape=None,
+                use_deformation=True, **kwargs):
         r"""
         """
         # check n_shape parameter
@@ -180,4 +184,4 @@ class LucasKanadeAPSFitter(APSFitter):
                 pdm = PDM(sm)
             self._fitters.append(algorithm(APSInterface, am, dm,
                                            self.aps.patch_shape, pdm,
-                                           self.use_procrustes, **kwargs))
+                                           use_deformation, **kwargs))

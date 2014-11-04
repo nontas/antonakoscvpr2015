@@ -7,7 +7,8 @@ from menpofit.fitter import MultilevelFitter
 from menpofit.fittingresult import MultilevelFittingResult
 from menpofit.transform.modeldriven import OrthoPDM, PDM
 from menpofit.transform.homogeneous import DifferentiableAlignmentSimilarity
-from .antonakoscvpr2015.menpo.algorithm import APSInterface, Forward
+
+from .algorithm import APSInterface, Forward
 
 
 class APSFitter(MultilevelFitter):
