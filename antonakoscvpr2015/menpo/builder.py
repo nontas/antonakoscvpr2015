@@ -4,8 +4,9 @@ import numpy as np
 from scipy.misc import comb as nchoosek
 from scipy.stats import multivariate_normal
 from scipy.sparse import block_diag
+
 from menpo.visualize import print_dynamic, progress_bar_str
-from menpo.feature import igo
+from menpo.feature import no_op
 from menpo.shape import PointTree, Tree, UndirectedGraph
 from menpo.transform import Translation, GeneralizedProcrustesAnalysis
 from menpo.model import PCAModel
@@ -14,13 +15,14 @@ from menpofit.builder import (DeformableModelBuilder,
                               normalization_wrt_reference_shape)
 from menpofit.base import create_pyramid
 from menpofit import checks
-from .antonakoscvpr2015.menpo.utils import build_patches_image, vectorize_patches_image
+
+from .utils import build_patches_image, vectorize_patches_image
 
 
 class APSBuilder(DeformableModelBuilder):
-    def __init__(self, adjacency_array=None, root_vertex=0, features=igo,
+    def __init__(self, adjacency_array=None, root_vertex=0, features=no_op,
                  patch_shape=(17, 17), normalization_diagonal=None, n_levels=2,
-                 downscale=2, scaled_shape_models=True, use_procrustes=True,
+                 downscale=2, scaled_shape_models=False, use_procrustes=True,
                  max_shape_components=None, n_appearance_parameters=None,
                  gaussian_per_patch=True):
         # check parameters
@@ -30,9 +32,8 @@ class APSBuilder(DeformableModelBuilder):
         max_shape_components = checks.check_max_components(
             max_shape_components, n_levels, 'max_shape_components')
         features = checks.check_features(features, n_levels)
-        n_appearance_parameters = _check_n_parameters(n_appearance_parameters,
-                                                      n_levels,
-                                                      'n_appearance_parameters')
+        n_appearance_parameters = _check_n_parameters(
+            n_appearance_parameters, n_levels, 'n_appearance_parameters')
 
         # flag whether to create MST
         self.tree_is_mst = adjacency_array is None
@@ -137,10 +138,9 @@ class APSBuilder(DeformableModelBuilder):
                 self.tree, relative_locations, level_str, verbose))
 
             # extract patches from all images
-            as_vectors = self.gaussian_per_patch
             all_patches = _warp_images(feature_images, group, label,
-                                       self.patch_shape, as_vectors, level_str,
-                                       verbose)
+                                       self.patch_shape, self.gaussian_per_patch, 
+									   level_str, verbose)
 
             # build and add appearance model to the list
             if self.gaussian_per_patch:
@@ -171,7 +171,7 @@ class APSBuilder(DeformableModelBuilder):
                    n_training_images):
         r"""
         """
-        from .antonakoscvpr2015.menpo.base import APS
+        from .base import APS
         return APS(shape_models, deformation_models, appearance_models,
                    n_training_images, self.tree, self.patch_shape,
                    self.features, self.reference_shape, self.downscale,
