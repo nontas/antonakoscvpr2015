@@ -1,9 +1,11 @@
 from __future__ import division
 import abc
+
 import numpy as np
 
-from menpofit.fittingresult import SemiParametricFittingResult
 from menpo.image import Image
+
+from menpofit.fittingresult import SemiParametricFittingResult
 from menpofit.transform.modeldriven import OrthoPDM
 from .utils import build_patches_image, vectorize_patches_image
 
@@ -104,31 +106,6 @@ class APSInterface(object):
         # S: (n_parts * w * h * n_channels) x (n_parts * w * h * n_channels)
         return S.T.dot(j).T
 
-    def solve(self, h, ja, e, h_s, p, neg_sign):
-        r"""
-        Parameters increment
-        dp --> (size: n_s x 1)
-        h: hessian (H = H_a + H_s)
-        ja: (J_a^T * S_a)
-        e: error image
-        sigma_a: appearance covariance (S_a)
-        h_s: shape hessian (H_s)
-        p: current shape parameters
-        """
-        b = ja.dot(e)
-        if h_s is not None:
-            if isinstance(self.algorithm.transform, OrthoPDM):
-                tmp_p = p.copy()
-                tmp_p[0:4] = 0.
-                b = b + h_s.dot(tmp_p)
-            else:
-                b = b + h_s.dot(p)
-        if neg_sign:
-            dp = -np.linalg.solve(h, b)
-        else:
-            dp = np.linalg.solve(h, b)
-        return dp
-
     def fitting_result(self, image, shape_parameters, gt_shape):
         return SemiParametricFittingResult(image, self.algorithm,
                                            parameters=shape_parameters,
@@ -164,6 +141,10 @@ class APSAlgorithm(object):
 
     @abc.abstractmethod
     def _algorithm_str(self):
+        pass
+
+    @abc.abstractmethod
+    def run(self, **kwarg):
         pass
 
 
@@ -222,8 +203,13 @@ class Forward(APSAlgorithm):
                 h = h + self._H_s
 
             # compute gauss-newton parameter updates
-            dp = self.interface.solve(h, ja, e, self._H_s,
-                                      shape_parameters[-1], True)
+            b = ja.dot(e)
+            p = shape_parameters[-1].copy()
+            if self._H_s is not None:
+                if isinstance(self.transform, OrthoPDM):
+                    p[0:4] = 0
+                b += self._H_s.dot(p)
+            dp = -np.linalg.solve(h, b)
 
             # update transform
             target = self.transform.target
@@ -254,11 +240,12 @@ class Inverse(APSAlgorithm):
         self._precompute()
 
     def _precompute(self):
-        # compute model's gradient
-        nabla_a = self.interface.gradient(self.template)
 
         # compute warp jacobian
         ds_dp = self.interface.ds_dp()
+
+        # compute model's gradient
+        nabla_a = self.interface.gradient(self.template)
 
         # compute appearance jacobian
         j = self.interface.steepest_descent_images(nabla_a, ds_dp)
@@ -266,12 +253,13 @@ class Inverse(APSAlgorithm):
         # transposed jacobian and covariance dot product
         self._ja = self.interface.ja(j, self.appearance_model[1])
 
-        # compute hessian
+        # compute hessian inverse
         self._H_s = None
-        self._h = self._ja.dot(j)
+        h = self._ja.dot(j)
         if self.use_deformation:
             self._H_s = self.interface.H_s()
-            self._h = self._h + self._H_s
+            h += self._H_s
+        self._inv_h = np.linalg.inv(h)
 
     def _algorithm_str(self):
         return 'Inverse'
@@ -283,7 +271,7 @@ class Inverse(APSAlgorithm):
 
         for _ in xrange(max_iters):
 
-            # compute warped image with current weights
+            # compute warped image
             i = self.interface.warp(image)
 
             # vectorize appearance
@@ -293,8 +281,13 @@ class Inverse(APSAlgorithm):
             e = vec_i - self.appearance_model[0]
 
             # compute gauss-newton parameter updates
-            dp = self.interface.solve(self._h, self._ja, e, self._H_s,
-                                      shape_parameters[-1], False)
+            b = self._ja.dot(e)
+            p = shape_parameters[-1].copy()
+            if self._H_s is not None:
+                if isinstance(self.transform, OrthoPDM):
+                    p[0:4] = 0
+                b += self._H_s.dot(p)
+            dp = self._inv_h.dot(b)
 
             # update transform
             target = self.transform.target
