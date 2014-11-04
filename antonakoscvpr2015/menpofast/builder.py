@@ -139,8 +139,9 @@ class APSBuilder(DeformableModelBuilder):
 
             # extract patches from all images
             all_patches = _warp_images(feature_images, group, label,
-                                       self.patch_shape, self.gaussian_per_patch, 
-									   level_str, verbose)
+                                       self.patch_shape,
+                                       self.gaussian_per_patch, level_str,
+                                       verbose)
 
             # build and add appearance model to the list
             if self.gaussian_per_patch:
@@ -373,8 +374,8 @@ def _build_appearance_model_per_patch(all_patches_array, n_points, patch_shape,
 
     # number of images
     n_images = all_patches_array.shape[-1]
-    
-	# appearance vector and patch vector lengths
+
+    # appearance vector and patch vector lengths
     patch_len = np.prod(patch_shape) * n_channels
 
     # compute covariance matrix for each patch

@@ -93,10 +93,11 @@ class APSInterface(object):
         return sdi.reshape((-1, sdi.shape[-1]))
 
     def ja(self, j, S):
-        # compute the dot product between the apperance jacobian and the
+        # compute the dot product between the appearance jacobian and the
         # covariance matrix
         # j: (n_parts x n_offsets x n_ch x w x h) x n_params
-        # S: (n_parts x n_offsets x n_ch x w x h) x (n_parts x n_offsets x n_ch x w x h)
+        # S: (n_parts x n_offsets x n_ch x w x h) x
+        #    (n_parts x n_offsets x n_ch x w x h)
         return S.T.dot(j).T
 
     def fitting_result(self, image, shape_parameters, gt_shape):
@@ -110,7 +111,8 @@ class APSAlgorithm(object):
     __metaclass__ = abc.ABCMeta
 
     def __init__(self, aps_interface, appearance_model, deformation_model,
-                 patch_shape, transform, use_deformation, eps=10**-5, **kwargs):
+                 patch_shape, transform, use_deformation, eps=10**-5,
+                 **kwargs):
         self.appearance_model = appearance_model
         self.deformation_model = deformation_model
         self.patch_shape = patch_shape
