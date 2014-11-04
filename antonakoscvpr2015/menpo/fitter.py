@@ -1,13 +1,13 @@
 from __future__ import division
+
 import numpy as np
+from menpo.transform.homogeneous import Scale
 
 from menpofit.fitter import MultilevelFitter
 from menpofit.fittingresult import MultilevelFittingResult
 from menpofit.transform.modeldriven import OrthoPDM, PDM
 from menpofit.transform.homogeneous import DifferentiableAlignmentSimilarity
-from menpo.transform.homogeneous import Scale
-
-from .algorithm import APSInterface, Forward
+from .antonakoscvpr2015.menpo.algorithm import APSInterface, Forward
 
 
 class APSFitter(MultilevelFitter):

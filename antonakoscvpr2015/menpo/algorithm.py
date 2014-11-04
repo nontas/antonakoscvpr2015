@@ -1,11 +1,12 @@
 from __future__ import division
 import abc
+
 import numpy as np
+from menpo.image import Image
 
 from menpofit.fittingresult import SemiParametricFittingResult
-from menpo.image import Image
 from menpofit.transform.modeldriven import OrthoPDM
-from .utils import build_patches_image, vectorize_patches_image
+from .antonakoscvpr2015.menpo.utils import build_patches_image, vectorize_patches_image
 
 
 class APSInterface(object):
