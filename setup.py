@@ -10,8 +10,7 @@ requirements = ['menpo>=0.3.0',
 
 setup(name='antonakoscvpr15',
       version='0.0.1',
-      description='Repository containing the code of the paper: A Unified '
-                  'Framework for Gauss-Newton Deformable Model Fitting',
+      description='CVPR 2015',
       author='Epameinondas Antonakos',
       author_email='antonakosn@gmail.com',
       include_dirs=include_dirs,

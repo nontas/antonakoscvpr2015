@@ -1,9 +1,9 @@
 from __future__ import division
+
 import numpy as np
 from scipy.misc import comb as nchoosek
 from scipy.stats import multivariate_normal
 from scipy.sparse import block_diag
-
 from menpo.visualize import print_dynamic, progress_bar_str
 from menpo.feature import igo
 from menpo.shape import PointTree, Tree, UndirectedGraph
@@ -11,7 +11,6 @@ from menpo.transform import Translation, GeneralizedProcrustesAnalysis
 from menpo.model import PCAModel
 
 from menpofast.utils import build_parts_image
-
 from menpofit.builder import (DeformableModelBuilder,
                               normalization_wrt_reference_shape)
 from menpofit.base import create_pyramid
@@ -164,7 +163,7 @@ class APSBuilder(DeformableModelBuilder):
                    n_training_images):
         r"""
         """
-        from .base import APS
+        from .antonakoscvpr2015.menpofast.base import APS
         return APS(shape_models, deformation_models, appearance_models,
                    n_training_images, self.tree, self.patch_shape,
                    self.features, self.reference_shape, self.downscale,
