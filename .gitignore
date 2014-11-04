@@ -7,7 +7,7 @@ cover/*
 *.exe
 *.DS_Store
 build/*
-cvpr15.egg-info/*
+*.egg-info/*
 .idea/*
 # Ignore IPython notebook autosave files
 .ipynb_checkpoints
