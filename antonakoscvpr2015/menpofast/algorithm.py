@@ -1,12 +1,14 @@
 from __future__ import division
 import abc
-import numpy as np
 
-from menpofit.fittingresult import SemiParametricFittingResult
+import numpy as np
 
 from menpofast.image import Image
 from menpofast.feature import gradient as fast_gradient
 from menpofast.utils import build_parts_image, convert_to_menpo
+
+from menpofit.fittingresult import SemiParametricFittingResult
+from menpofit.transform.modeldriven import OrthoPDM
 
 
 class APSInterface(object):
@@ -58,7 +60,7 @@ class APSInterface(object):
         r"""
         Warp function F: It extracts the patches around each shape point
         returns an image object of size:
-        n_points x patch_shape[0] x patch_shape[1] x n_channels
+        n_part x n_offsets x n_channels x h x w
         """
         return build_parts_image(image, self.algorithm.transform.target,
                                  self.algorithm.patch_shape)
@@ -66,7 +68,7 @@ class APSInterface(object):
     def gradient(self, image):
         r"""
         Returns the gradients of the patches
-        n_dims x n_parts x n_channels x  (w x h)
+        n_dims x n_parts x x n_offsets x n_channels x  (w x h)
         """
         g = fast_gradient(image.pixels.reshape(
             (-1,) + self.algorithm.patch_shape))
@@ -97,24 +99,6 @@ class APSInterface(object):
         # S: (n_parts x n_offsets x n_ch x w x h) x (n_parts x n_offsets x n_ch x w x h)
         return S.T.dot(j).T
 
-    # def solve(self, h, ja, e, h_s, p, neg_sign):
-    #     r"""
-    #     Parameters increment
-    #     dp --> (size: n_s x 1)
-    #     h: hessian (H = H_a + H_s)
-    #     ja: (J_a^T * S_a)
-    #     e: error image
-    #     sigma_a: appearance covariance (S_a)
-    #     h_s: shape hessian (H_s)
-    #     p: current shape parameters
-    #     """
-    #     b = ja.dot(e) + h_s.dot(p)
-    #     if neg_sign:
-    #         dp = -np.linalg.solve(h, b)
-    #     else:
-    #         dp = np.linalg.solve(h, b)
-    #     return dp
-
     def fitting_result(self, image, shape_parameters, gt_shape):
         return SemiParametricFittingResult(image, self.algorithm,
                                            parameters=shape_parameters,
@@ -126,13 +110,13 @@ class APSAlgorithm(object):
     __metaclass__ = abc.ABCMeta
 
     def __init__(self, aps_interface, appearance_model, deformation_model,
-                 patch_shape, transform, use_procrustes, eps=10**-5, **kwargs):
+                 patch_shape, transform, use_deformation, eps=10**-5, **kwargs):
         self.appearance_model = appearance_model
         self.deformation_model = deformation_model
         self.patch_shape = patch_shape
-        self.use_procrustes = use_procrustes
         self.template = Image(appearance_model[0])
         self.transform = transform
+        self.use_deformation = use_deformation
         self.eps = eps
 
         # check if provided svd or covariance matrix
@@ -168,7 +152,7 @@ class Forward(APSAlgorithm):
         # call super constructor
         super(Forward, self).__init__(aps_interface, appearance_model,
                                       deformation_model, patch_shape,
-                                      transform, eps,  **kwargs)
+                                      transform, eps, **kwargs)
 
         # pre-compute
         self._precompute()
@@ -178,7 +162,9 @@ class Forward(APSAlgorithm):
         self._ds_dp = self.interface.ds_dp()
 
         # compute shape hessian
-        self._H_s = self.interface.H_s()
+        self._H_s = None
+        if self.use_deformation:
+            self._H_s = self.interface.H_s()
 
     def _algorithm_str(self):
         return 'Forward'
@@ -212,13 +198,18 @@ class Forward(APSAlgorithm):
             ja = self.interface.ja(j, self.Sigma_a)
 
             # compute hessian
-            h = ja.dot(j) + self._H_s
+            h = ja.dot(j)
+            if self.use_deformation:
+                h = h + self._H_s
 
             # compute gauss-newton parameter updates
+            b = ja.dot(e)
             p = shape_parameters[-1].copy()
-            if self.use_procrustes:
-                p[0:4] = 0
-            dp = np.linalg.solve(h, ja.dot(e) + self._H_s.dot(p))
+            if self._H_s is not None:
+                if isinstance(self.transform, OrthoPDM):
+                    p[0:4] = 0
+                b += self._H_s.dot(p)
+            dp = -np.linalg.solve(h, b)
 
             # update transform
             target = self.transform.target
@@ -232,7 +223,8 @@ class Forward(APSAlgorithm):
                 break
 
         # return fitting result
-        return self.interface.fitting_result(image, shape_parameters,
+        return self.interface.fitting_result(convert_to_menpo(image),
+                                             shape_parameters,
                                              gt_shape=gt_shape)
 
 
@@ -253,9 +245,6 @@ class Inverse(APSAlgorithm):
         # compute warp jacobian
         ds_dp = self.interface.ds_dp()
 
-        # compute shape hessian
-        self._H_s = self.interface.H_s()
-
         # compute model's gradient
         nabla_a = self.interface.gradient(self.template)
 
@@ -266,7 +255,11 @@ class Inverse(APSAlgorithm):
         self._ja = self.interface.ja(j, self.Sigma_a)
 
         # compute hessian inverse
-        h = self._ja.dot(j) + self._H_s
+        self._H_s = None
+        h = self._ja.dot(j)
+        if self.use_deformation:
+            self._H_s = self.interface.H_s()
+            h += self._H_s
         self._inv_h = np.linalg.inv(h)
 
     def _algorithm_str(self):
@@ -292,14 +285,17 @@ class Inverse(APSAlgorithm):
             e = masked_i - masked_m
 
             # compute gauss-newton parameter updates
+            b = self._ja.dot(e)
             p = shape_parameters[-1].copy()
-            if self.use_procrustes:
-                p[0:4] = 0
-            dp = -self._inv_h.dot(self._ja.dot(e) + self._H_s.dot(p))
+            if self._H_s is not None:
+                if isinstance(self.transform, OrthoPDM):
+                    p[0:4] = 0
+                b += self._H_s.dot(p)
+            dp = self._inv_h.dot(b)
 
             # update transform
             target = self.transform.target
-            self.transform.from_vector_inplace(self.transform.as_vector() + dp)
+            self.transform.from_vector_inplace(self.transform.as_vector() - dp)
             shape_parameters.append(self.transform.as_vector())
 
             # test convergence
