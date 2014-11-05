@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 
-from menpo.shape import PointTree
+from menpo.shape import PointTree, PointDirectedGraph, Tree
 
 
 def pickle_load(path):
@@ -63,10 +63,10 @@ def plot_gaussian_ellipse(cov, mean, n_std=2, ax=None, **kwargs):
 
 def plot_deformation_model(aps, level):
     mean_shape = aps.shape_models[level].mean().points
-    for e in range(aps.tree.n_edges):
+    for e in range(aps.graph.n_edges):
         # find vertices
-        parent = aps.tree.adjacency_array[e, 0]
-        child = aps.tree.adjacency_array[e, 1]
+        parent = aps.graph.adjacency_array[e, 0]
+        child = aps.graph.adjacency_array[e, 1]
 
         # relative location mean
         rel_loc_mean = mean_shape[child, :] - mean_shape[parent, :]
@@ -86,5 +86,9 @@ def plot_deformation_model(aps, level):
     aps.shape_models[level].mean().view_on(plt.gcf().number)
 
     # create and plot edge connections
-    PointTree(mean_shape, aps.tree.adjacency_array,
-              aps.tree.root_vertex).view_on(plt.gcf().number)
+    if isinstance(aps.graph, Tree):
+        PointTree(mean_shape, aps.graph.adjacency_array,
+                  aps.graph.root_vertex).view_on(plt.gcf().number)
+    else:
+        PointDirectedGraph(mean_shape,
+                           aps.graph.adjacency_array).view_on(plt.gcf().number)
