@@ -7,7 +7,8 @@ from scipy.sparse import block_diag
 
 from menpo.visualize import print_dynamic, progress_bar_str
 from menpo.feature import no_op
-from menpo.shape import PointTree, Tree, UndirectedGraph
+from menpo.shape import (Tree, UndirectedGraph, DirectedGraph, PointTree,
+                         PointDirectedGraph)
 from menpo.transform import Translation, GeneralizedProcrustesAnalysis
 from menpo.model import PCAModel
 
@@ -20,7 +21,7 @@ from .utils import build_patches_image, vectorize_patches_image
 
 
 class APSBuilder(DeformableModelBuilder):
-    def __init__(self, adjacency_array=None, root_vertex=0, features=no_op,
+    def __init__(self, adjacency_array=None, root_vertex=None, features=no_op,
                  patch_shape=(17, 17), normalization_diagonal=None, n_levels=2,
                  downscale=2, scaled_shape_models=False, use_procrustes=True,
                  max_shape_components=None, n_appearance_parameters=None,
@@ -35,13 +36,18 @@ class APSBuilder(DeformableModelBuilder):
         n_appearance_parameters = _check_n_parameters(
             n_appearance_parameters, n_levels, 'n_appearance_parameters')
 
-        # flag whether to create MST
-        self.tree_is_mst = adjacency_array is None
-        if adjacency_array is not None:
-            self.tree = Tree(adjacency_array, root_vertex)
+        # check adjacency_array, root_vertex
+        if adjacency_array is None:
+            self.graph = None
+            if root_vertex is None:
+                self.root_vertex = 0
+        else:
+            if root_vertex is None:
+                self.graph = DirectedGraph(adjacency_array)
+            else:
+                self.graph = Tree(adjacency_array, root_vertex)
 
         # store parameters
-        self.root_vertex = root_vertex
         self.features = features
         self.patch_shape = patch_shape
         self.normalization_diagonal = normalization_diagonal
@@ -65,11 +71,12 @@ class APSBuilder(DeformableModelBuilder):
                                     self.downscale, self.features,
                                     verbose=verbose)
 
-        # if tree not provided, compute the MST
-        shapes = [i.landmarks[group][label] for i in normalized_images]
-        if self.tree_is_mst:
-            self.tree = _compute_minimum_spanning_tree(shapes, self.root_vertex,
-                                                       '- ', verbose)
+        # if graph not provided, compute the MST
+        if self.graph is None:
+            shapes = [i.landmarks[group][label] for i in normalized_images]
+            self.graph = _compute_minimum_spanning_tree(shapes,
+                                                        self.root_vertex,
+                                                        '- ', verbose)
 
         # build the model at each pyramid level
         if verbose:
@@ -131,16 +138,17 @@ class APSBuilder(DeformableModelBuilder):
 
             # compute relative locations from all shapes
             relative_locations = _get_relative_locations(
-                train_shapes, self.tree, level_str, verbose)
+                train_shapes, self.graph, level_str, verbose)
 
             # build and add deformation model to the list
             deformation_models.append(_build_deformation_model(
-                self.tree, relative_locations, level_str, verbose))
+                self.graph, relative_locations, level_str, verbose))
 
             # extract patches from all images
             all_patches = _warp_images(feature_images, group, label,
-                                       self.patch_shape, self.gaussian_per_patch, 
-									   level_str, verbose)
+                                       self.patch_shape,
+                                       self.gaussian_per_patch, level_str,
+                                       verbose)
 
             # build and add appearance model to the list
             if self.gaussian_per_patch:
@@ -173,7 +181,7 @@ class APSBuilder(DeformableModelBuilder):
         """
         from .base import APS
         return APS(shape_models, deformation_models, appearance_models,
-                   n_training_images, self.tree, self.patch_shape,
+                   n_training_images, self.graph, self.patch_shape,
                    self.features, self.reference_shape, self.downscale,
                    self.scaled_shape_models, self.use_procrustes)
 
@@ -204,7 +212,8 @@ def _warp_images(images, group, label, patch_shape, as_vectors, level_str,
                                  show_bar=False)))
 
         # extract patches from this image
-        patches_image = build_patches_image(i, None, patch_shape)
+        patches_image = build_patches_image(i, None, patch_shape, group=group,
+                                            label=label)
 
         # store
         if as_vectors:
@@ -215,26 +224,29 @@ def _warp_images(images, group, label, patch_shape, as_vectors, level_str,
     return all_patches
 
 
-def _get_relative_locations(shapes, tree, level_str, verbose):
+def _get_relative_locations(shapes, graph, level_str, verbose):
     r"""
     returns numpy.array of size 2 x n_images x n_edges
     """
-    # convert given shapes to point trees
-    point_trees = [PointTree(shape.points, tree.adjacency_array,
-                             tree.root_vertex)
-                   for shape in shapes]
+    # convert given shapes to point graphs
+    if isinstance(graph, Tree):
+        point_graphs = [PointTree(shape.points, graph.adjacency_array,
+                                  graph.root_vertex) for shape in shapes]
+    else:
+        point_graphs = [PointDirectedGraph(shape.points, graph.adjacency_array)
+                        for shape in shapes]
 
     # initialize an output numpy array
-    rel_loc_array = np.empty((2, tree.n_edges, len(point_trees)))
+    rel_loc_array = np.empty((2, graph.n_edges, len(point_graphs)))
 
     # get relative locations
-    for c, pt in enumerate(point_trees):
+    for c, pt in enumerate(point_graphs):
         # print progress
         if verbose:
             print_dynamic('{}Computing relative locations from '
                           'shapes - {}'.format(
                           level_str,
-                          progress_bar_str(float(c + 1) / len(point_trees),
+                          progress_bar_str(float(c + 1) / len(point_graphs),
                                            show_bar=False)))
 
         # get relative locations from this shape
@@ -293,31 +305,31 @@ def _compute_minimum_spanning_tree(shapes, root_vertex, level_str, verbose):
     complete_graph = UndirectedGraph(edges)
 
     if verbose:
-        print_dynamic('{}Minimum spanning tree computed.\n'.format(level_str))
+        print_dynamic('{}Minimum spanning graph computed.\n'.format(level_str))
 
-    # compute minimum spanning tree
+    # compute minimum spanning graph
     return complete_graph.minimum_spanning_tree(weights, root_vertex)
 
 
-def _build_deformation_model(tree, relative_locations, level_str, verbose):
+def _build_deformation_model(graph, relative_locations, level_str, verbose):
     # build deformation model
     if verbose:
         print_dynamic('{}Training deformation distribution per '
-                      'tree edge'.format(level_str))
-    def_len = 2 * tree.n_vertices
+                      'graph edge'.format(level_str))
+    def_len = 2 * graph.n_vertices
     def_cov = np.zeros((def_len, def_len))
-    for e in range(tree.n_edges):
+    for e in range(graph.n_edges):
         # print progress
         if verbose:
             print_dynamic('{}Training deformation distribution '
                           'per edge - {}'.format(
                           level_str,
-                          progress_bar_str(float(e + 1) / tree.n_edges,
+                          progress_bar_str(float(e + 1) / graph.n_edges,
                                            show_bar=False)))
 
         # get vertices adjacent to edge
-        parent = tree.adjacency_array[e, 0]
-        child = tree.adjacency_array[e, 1]
+        parent = graph.adjacency_array[e, 0]
+        child = graph.adjacency_array[e, 1]
 
         # compute covariance matrix
         edge_cov = np.linalg.inv(np.cov(relative_locations[..., e]))

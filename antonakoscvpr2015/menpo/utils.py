@@ -1,7 +1,7 @@
 from menpo.image import Image
 
 
-def build_patches_image(image, centres, patch_shape):
+def build_patches_image(image, centres, patch_shape, group=None, label=None):
     r"""
     Return the image patches as a menpo.image object
     size: n_points x patch_shape[0] x patch_shape[1] x n_channels
@@ -9,7 +9,9 @@ def build_patches_image(image, centres, patch_shape):
     # extract patches
     if centres is None:
         patches = image.extract_patches_around_landmarks(patch_size=patch_shape,
-                                                         as_single_array=True)
+                                                         as_single_array=True,
+                                                         group=group,
+                                                         label=label)
     else:
         patches = image.extract_patches(centres, patch_size=patch_shape,
                                         as_single_array=True)

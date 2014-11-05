@@ -71,8 +71,8 @@ def train_aps(experiments_path, fast, training_images_options, training_options,
         training_options['features'] = parse_features(
             training_options['features'], fast)
         training_options['adjacency_array'], training_options['root_vertex'] = \
-            parse_tree(training_options['tree'])
-        del training_options['tree']
+            parse_tree(training_options['graph'])
+        del training_options['graph']
         training_options['max_shape_components'] = None
 
         # Train model
@@ -221,7 +221,7 @@ def parse_tree(tree_type):
                 adjacency_array[i-1, 1] = i
         root_vertex = 34
     else:
-        raise ValueError('Invalid tree str provided')
+        raise ValueError('Invalid graph str provided')
     return adjacency_array, root_vertex
 
 
@@ -252,7 +252,7 @@ def parse_algorithm(fast, algorithm):
 def model_filename(training_images_options, training_options, fast):
     filename = training_images_options['db_name'] + '_' + \
                training_options['features'] + '_' + \
-               training_options['tree'] + \
+               training_options['graph'] + \
                '_patch' + str(training_options['patch_shape'][0]) + \
                '_norm' + str(training_options['normalization_diagonal']) + \
                '_lev' + str(training_options['n_levels']) + \

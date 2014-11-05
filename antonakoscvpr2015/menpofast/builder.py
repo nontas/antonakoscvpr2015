@@ -65,7 +65,7 @@ class APSBuilder(DeformableModelBuilder):
                                     self.downscale, self.features,
                                     verbose=verbose)
 
-        # if tree not provided, compute the MST
+        # if graph not provided, compute the MST
         shapes = [i.landmarks[group][label] for i in normalized_images]
         if self.tree_is_mst:
             self.tree = _compute_minimum_spanning_tree(shapes, self.root_vertex,
@@ -296,9 +296,9 @@ def _compute_minimum_spanning_tree(shapes, root_vertex, level_str, verbose):
     complete_graph = UndirectedGraph(edges)
 
     if verbose:
-        print_dynamic('{}Minimum spanning tree computed.\n'.format(level_str))
+        print_dynamic('{}Minimum spanning graph computed.\n'.format(level_str))
 
-    # compute minimum spanning tree
+    # compute minimum spanning graph
     return complete_graph.minimum_spanning_tree(weights, root_vertex)
 
 
@@ -306,7 +306,7 @@ def _build_deformation_model(tree, relative_locations, level_str, verbose):
     # build deformation model
     if verbose:
         print_dynamic('{}Training deformation distribution per '
-                      'tree edge'.format(level_str))
+                      'graph edge'.format(level_str))
     def_len = 2 * tree.n_vertices
     def_cov = np.zeros((def_len, def_len))
     for e in range(tree.n_edges):
