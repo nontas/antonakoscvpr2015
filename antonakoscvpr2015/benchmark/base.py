@@ -8,7 +8,7 @@ from menpo.visualize import progress_bar_str, print_dynamic
 from menpo.landmark import labeller
 
 from antonakoscvpr2015.utils.base import pickle_dump, pickle_load
-from .graphs import parse_graph
+from .graphs import parse_deformation_graph, parse_appearance_graph
 
 
 def load_database(path_to_images, save_path, db_name, crop_percentage,
@@ -53,7 +53,7 @@ def load_database(path_to_images, save_path, db_name, crop_percentage,
 
 
 def train_aps(experiments_path, fast, group, training_images_options,
-              training_options, verbose):
+              training_options, save_model, verbose):
     # update training_images_options
     training_images_options['save_path'] = os.path.join(experiments_path,
                                                         'Databases')
@@ -62,19 +62,25 @@ def train_aps(experiments_path, fast, group, training_images_options,
     training_images_options['verbose'] = verbose
 
     # parse training options
-    training_options['adjacency_array'], training_options['root_vertex'] = \
-        parse_graph(training_options['graph'])
+    adj, rv = parse_deformation_graph(training_options['graph_deformation'])
+    training_options['adjacency_array_deformation'] = adj
+    training_options['root_vertex_deformation'] = rv
+    adj, fl = parse_appearance_graph(training_options['graph_appearance'])
+    training_options['adjacency_array_appearance'] = adj
+    training_options['gaussian_per_patch'] = fl
     training_options['features'] = parse_features(training_options['features'],
                                                   fast)
-    graph_str = training_options['graph']
-    del training_options['graph']
+    graph_deformation_str = training_options['graph_deformation']
+    graph_appearance_str = training_options['graph_appearance']
+    del training_options['graph_deformation']
+    del training_options['graph_appearance']
 
     # Load training images
     training_images = load_database(**training_images_options)
 
     # make model filename
     filename = model_filename(training_images_options, training_options, group,
-                              fast, graph_str)
+                              fast, graph_deformation_str, graph_appearance_str)
     save_path = os.path.join(experiments_path, 'Models', filename)
 
     # train model
@@ -101,7 +107,8 @@ def train_aps(experiments_path, fast, group, training_images_options,
                                                        verbose=verbose)
 
         # save model
-        pickle_dump(aps, save_path)
+        if save_model:
+            pickle_dump(aps, save_path)
 
     return aps, filename, training_images
 
@@ -174,7 +181,11 @@ def fit_aps(aps, modelfilename, experiments_path, fast, group,
             print_dynamic('- Fitting completed: [<=0.03: {0:.1f}%, <=0.04: '
                           '{1:.1f}%]\n'.format(perc1 * 100. / n_images,
                                                perc2 * 100. / n_images))
-        pickle_dump(fitting_results, save_path)
+
+        errors = []
+        errors.append([fr.final_error() for fr in fitting_results])
+        errors.append([fr.initial_error() for fr in fitting_results])
+        pickle_dump(errors, save_path)
     return fitting_results, filename
 
 
@@ -236,14 +247,15 @@ def parse_algorithm(fast, algorithm):
 
 
 def model_filename(training_images_options, training_options, group, fast,
-                   graph_str):
+                   graph_deformation_str, graph_appearance_str):
     filename = training_images_options['db_name']
     if group is not None:
         filename += '_' + group.__name__
     else:
         filename += '_PTS'
-    filename += '_' + training_options['features'].__name__ + '_' + \
-                graph_str + \
+    filename += '_' + training_options['features'].__name__ + \
+                '_def-' + graph_deformation_str + \
+                '_app-' + graph_appearance_str + \
                 '_patch' + str(training_options['patch_shape'][0]) + \
                 '_norm' + str(training_options['normalization_diagonal']) + \
                 '_lev' + str(training_options['n_levels']) + \
@@ -257,10 +269,6 @@ def model_filename(training_images_options, training_options, group, fast,
         filename += '_procrustes'
     else:
         filename += '_noProcrustes'
-    if training_options['gaussian_per_patch']:
-        filename += '_multipleGaussians'
-    else:
-        filename += '_oneGaussian'
     if fast:
         filename += '_menpofast'
     else:

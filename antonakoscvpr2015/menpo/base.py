@@ -3,22 +3,23 @@ import numpy as np
 
 from serializablecallable import SerializableCallable
 from menpofit.base import DeformableModel
-from menpo.shape import PointTree, PointDirectedGraph, Tree, DirectedGraph
+from menpo.shape import PointTree, PointDirectedGraph, Tree
 
 
 class APS(DeformableModel):
     """
     """
     def __init__(self, shape_models, deformation_models, appearance_models,
-                 n_training_images, graph, patch_shape, features,
-                 reference_shape, downscale, scaled_shape_models,
-                 use_procrustes):
+                 n_training_images, graph_appearance, graph_deformation,
+                 patch_shape, features, reference_shape, downscale,
+                 scaled_shape_models, use_procrustes):
         DeformableModel.__init__(self, features)
         self.n_training_images = n_training_images
         self.shape_models = shape_models
         self.deformation_models = deformation_models
         self.appearance_models = appearance_models
-        self.graph = graph
+        self.graph_appearance = graph_appearance
+        self.graph_deformation = graph_deformation
         self.patch_shape = patch_shape
         self.reference_shape = reference_shape
         self.downscale = downscale
@@ -63,13 +64,15 @@ class APS(DeformableModel):
         shape_weights *= sm.eigenvalues[:n_shape_weights] ** 0.5
         shape_instance = sm.instance(shape_weights)
         if as_graph:
-            if isinstance(self.graph, Tree):
-                shape_instance = PointTree(shape_instance.points,
-                                           self.graph.adjacency_array,
-                                           self.graph.root_vertex)
+            if isinstance(self.graph_deformation, Tree):
+                shape_instance = PointTree(
+                    shape_instance.points,
+                    self.graph_deformation.adjacency_array,
+                    self.graph_deformation.root_vertex)
             else:
-                shape_instance = PointDirectedGraph(shape_instance.points,
-                                                    self.graph.adjacency_array)
+                shape_instance = PointDirectedGraph(
+                    shape_instance.points,
+                    self.graph_deformation.adjacency_array)
 
         return shape_instance
 
@@ -82,13 +85,15 @@ class APS(DeformableModel):
                          sm.eigenvalues[:sm.n_active_components]**0.5)
         shape_instance = sm.instance(shape_weights)
         if as_graph:
-            if isinstance(self.graph, Tree):
-                shape_instance = PointTree(shape_instance.points,
-                                           self.graph.adjacency_array,
-                                           self.graph.root_vertex)
+            if isinstance(self.graph_deformation, Tree):
+                shape_instance = PointTree(
+                    shape_instance.points,
+                    self.graph_deformation.adjacency_array,
+                    self.graph_deformation.root_vertex)
             else:
-                shape_instance = PointDirectedGraph(shape_instance.points,
-                                                    self.graph.adjacency_array)
+                shape_instance = PointDirectedGraph(
+                    shape_instance.points,
+                    self.graph_deformation.adjacency_array)
 
         return shape_instance
 

@@ -3,7 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 
-from menpo.shape import PointTree, PointDirectedGraph, Tree
+from menpo.shape import (PointTree, PointDirectedGraph, Tree,
+                         PointUndirectedGraph)
 
 
 def pickle_load(path):
@@ -13,7 +14,10 @@ def pickle_load(path):
 
 def pickle_dump(obj, path):
     with open(str(path), 'wb') as f:
-        cPickle.dump(obj, f, protocol=2)
+        try:
+            cPickle.dump(obj, f, protocol=2)
+        except:
+            cPickle.dump(obj, f)
 
 
 def plot_gaussian_ellipse(cov, mean, n_std=2, ax=None, **kwargs):
@@ -61,12 +65,12 @@ def plot_gaussian_ellipse(cov, mean, n_std=2, ax=None, **kwargs):
     return ellip
 
 
-def plot_deformation_model(aps, level):
+def plot_deformation_model(aps, level, n_std):
     mean_shape = aps.shape_models[level].mean().points
-    for e in range(aps.graph.n_edges):
+    for e in range(aps.graph_deformation.n_edges):
         # find vertices
-        parent = aps.graph.adjacency_array[e, 0]
-        child = aps.graph.adjacency_array[e, 1]
+        parent = aps.graph_deformation.adjacency_array[e, 0]
+        child = aps.graph_deformation.adjacency_array[e, 1]
 
         # relative location mean
         rel_loc_mean = mean_shape[child, :] - mean_shape[parent, :]
@@ -80,15 +84,28 @@ def plot_deformation_model(aps, level):
 
         # plot ellipse
         plot_gaussian_ellipse(cov_mat, mean_shape[parent, :] + rel_loc_mean,
-                              n_std=2, facecolor='none', edgecolor='r')
+                              n_std=n_std, facecolor='none', edgecolor='r')
 
     # plot mean shape points
-    aps.shape_models[level].mean().view_on(plt.gcf().number)
+    plt.scatter(aps.shape_models[level].mean().points[:, 0],
+                aps.shape_models[level].mean().points[:, 1])
+    #aps.shape_models[level].mean().pointsview_on(plt.gcf().number)
 
     # create and plot edge connections
-    if isinstance(aps.graph, Tree):
-        PointTree(mean_shape, aps.graph.adjacency_array,
-                  aps.graph.root_vertex).view_on(plt.gcf().number)
+    if isinstance(aps.graph_deformation, Tree):
+        PointTree(mean_shape, aps.graph_deformation.adjacency_array,
+                  aps.graph_deformation.root_vertex).view_on(plt.gcf().number)
     else:
         PointDirectedGraph(mean_shape,
-                           aps.graph.adjacency_array).view_on(plt.gcf().number)
+                           aps.graph_deformation.adjacency_array).view_on(plt.gcf().number)
+
+
+def plot_appearance_graph(aps, level):
+    mean_shape = aps.shape_models[level].mean().points
+
+    # plot mean shape points
+    plt.scatter(aps.shape_models[level].mean().points[:, 0],
+                aps.shape_models[level].mean().points[:, 1])
+
+    # create and plot edge connections
+    PointUndirectedGraph(mean_shape, aps.graph_appearance.adjacency_array).view_on(plt.gcf().number)
