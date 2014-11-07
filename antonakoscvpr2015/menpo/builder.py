@@ -296,7 +296,7 @@ def _compute_minimum_spanning_tree(shapes, root_vertex, level_str, verbose):
 
             # print progress
             if verbose:
-                print_dynamic('{}Computing complete graph_deformation`s weights - {}'.format(
+                print_dynamic('{}Computing complete graph`s weights - {}'.format(
                     level_str,
                     progress_bar_str(float(e + 1) / n_edges,
                                      show_bar=False)))
@@ -322,13 +322,13 @@ def _compute_minimum_spanning_tree(shapes, root_vertex, level_str, verbose):
                                                                  mean=m, cov=c))
             weights[j, i] = weights[i, j]
 
-    # create undirected graph_deformation
+    # create undirected graph
     complete_graph = UndirectedGraph(edges)
 
     if verbose:
-        print_dynamic('{}Minimum spanning graph_deformation computed.\n'.format(level_str))
+        print_dynamic('{}Minimum spanning graph computed.\n'.format(level_str))
 
-    # compute minimum spanning graph_deformation
+    # compute minimum spanning graph
     return complete_graph.minimum_spanning_tree(weights, root_vertex)
 
 
@@ -336,7 +336,7 @@ def _build_deformation_model(graph, relative_locations, level_str, verbose):
     # build deformation model
     if verbose:
         print_dynamic('{}Training deformation distribution per '
-                      'graph_deformation edge'.format(level_str))
+                      'graph edge'.format(level_str))
     def_len = 2 * graph.n_vertices
     def_cov = np.zeros((def_len, def_len))
     for e in range(graph.n_edges):
@@ -411,6 +411,7 @@ def _build_appearance_model_block_diagonal(all_patches_array, n_points,
     if verbose:
         print_dynamic('{}Training appearance distribution per '
                       'patch'.format(level_str))
+
     # compute mean appearance vector
     app_mean = np.mean(all_patches_array, axis=1)
 
@@ -435,60 +436,13 @@ def _build_appearance_model_block_diagonal(all_patches_array, n_points,
         cov_mat = np.cov(all_patches_array[i_from:i_to, :])
 
         # compute covariance inverse
-        cov_mat = _covariance_matrix_inverse(cov_mat, n_appearance_parameters)
+        inv_cov_mat = _covariance_matrix_inverse(cov_mat, n_appearance_parameters)
 
         # store covariance
-        all_cov.append(cov_mat)
+        all_cov.append(cov_inv_cov_mat)
 
     # create final sparse covariance matrix
     return app_mean, block_diag(all_cov).tocsr()
-
-
-def _convert_sum_cost_to_matrical(vector_len, n_vectors, graph, level_str,
-                                  verbose):
-    # initialize block sparse covariance matrix
-    all_cov = lil_matrix((n_vectors * vector_len,
-                          n_vectors * vector_len))
-
-    # compute covariance matrix for each edge
-    for e in range(graph.n_edges):
-        # print progress
-        if verbose:
-            print_dynamic('{}Training appearance distribution '
-                          'per edge - {}'.format(
-                          level_str,
-                          progress_bar_str(float(e + 1) / graph.n_edges,
-                                           show_bar=False)))
-
-        # edge vertices
-        v1 = np.min(graph.adjacency_array[e, :])
-        v2 = np.max(graph.adjacency_array[e, :])
-
-        # find indices in target covariance matrix
-        v1_from = v1 * vector_len
-        v1_to = (v1 + 1) * vector_len
-        v2_from = v2 * vector_len
-        v2_to = (v2 + 1) * vector_len
-
-        # extract data
-        edge_data = np.concatenate((all_patches_array[v1_from:v1_to, :],
-                                    all_patches_array[v2_from:v2_to, :]))
-
-        # compute covariance inverse
-        icov = _covariance_matrix_inverse(np.cov(edge_data),
-                                          n_appearance_parameters)
-
-        # v1, v2
-        all_cov[v1_from:v1_to, v2_from:v2_to] += icov[:patch_len, patch_len::]
-
-        # v2, v1
-        all_cov[v2_from:v2_to, v1_from:v1_to] += icov[patch_len::, :patch_len]
-
-        # v1, v1
-        all_cov[v1_from:v1_to, v1_from:v1_to] += icov[:patch_len, :patch_len]
-
-        # v2, v2
-        all_cov[v2_from:v2_to, v2_from:v2_to] += icov[patch_len::, patch_len::]
 
 
 def _build_appearance_model_sparse(all_patches_array, graph, patch_shape,

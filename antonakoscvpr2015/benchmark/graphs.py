@@ -65,6 +65,12 @@ def parse_appearance_graph(graph_type):
         # DIAGONAL
         adjacency_array = None
         gaussian_per_patch = True
+    elif graph_type == 'diagonal_graph_68':
+        adjacency_array = np.empty((68, 2), dtype=np.int)
+        for i in range(68):
+            adjacency_array[i, 0] = i
+            adjacency_array[i, 1] = i
+        gaussian_per_patch = True
     elif graph_type == 'full_graph_68':
         kk = 67*67 - sum(range(67))
         adjacency_array = np.empty((kk, 2), dtype=np.int)

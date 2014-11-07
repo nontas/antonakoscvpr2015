@@ -3,11 +3,12 @@ from __future__ import division
 import numpy as np
 from scipy.misc import comb as nchoosek
 from scipy.stats import multivariate_normal
-from scipy.sparse import block_diag
+from scipy.sparse import block_diag, lil_matrix
 
 from menpo.visualize import print_dynamic, progress_bar_str
 from menpo.feature import no_op
-from menpo.shape import PointTree, Tree, UndirectedGraph
+from menpo.shape import (Tree, UndirectedGraph, DirectedGraph, PointTree,
+                         PointDirectedGraph)
 from menpo.transform import Translation, GeneralizedProcrustesAnalysis
 from menpo.model import PCAModel
 
@@ -20,11 +21,14 @@ from menpofast.utils import build_parts_image
 
 
 class APSBuilder(DeformableModelBuilder):
-    def __init__(self, adjacency_array=None, root_vertex=0, features=no_op,
-                 patch_shape=(17, 17), normalization_diagonal=None, n_levels=2,
-                 downscale=2, scaled_shape_models=False, use_procrustes=True,
-                 max_shape_components=None, n_appearance_parameters=None,
-                 gaussian_per_patch=True):
+    r"""
+    """
+    def __init__(self, adjacency_array_appearance=None, gaussian_per_patch=True,
+                 adjacency_array_deformation=None, root_vertex_deformation=None,
+                 features=no_op, patch_shape=(17, 17),
+                 normalization_diagonal=None, n_levels=2, downscale=2,
+                 scaled_shape_models=False, use_procrustes=True,
+                 max_shape_components=None, n_appearance_parameters=None):
         # check parameters
         checks.check_n_levels(n_levels)
         checks.check_downscale(downscale)
@@ -35,13 +39,25 @@ class APSBuilder(DeformableModelBuilder):
         n_appearance_parameters = _check_n_parameters(
             n_appearance_parameters, n_levels, 'n_appearance_parameters')
 
-        # flag whether to create MST
-        self.tree_is_mst = adjacency_array is None
-        if adjacency_array is not None:
-            self.tree = Tree(adjacency_array, root_vertex)
+        # appearance graph
+        if adjacency_array_appearance is None:
+            self.graph_appearance = None
+        else:
+            self.graph_appearance = UndirectedGraph(adjacency_array_appearance)
+
+        # check adjacency_array_deformation, root_vertex_deformation
+        if adjacency_array_deformation is None:
+            self.graph_deformation = None
+            if root_vertex_deformation is None:
+                self.root_vertex = 0
+        else:
+            if root_vertex_deformation is None:
+                self.graph_deformation = DirectedGraph(adjacency_array_deformation)
+            else:
+                self.graph_deformation = Tree(adjacency_array_deformation,
+                                              root_vertex_deformation)
 
         # store parameters
-        self.root_vertex = root_vertex
         self.features = features
         self.patch_shape = patch_shape
         self.normalization_diagonal = normalization_diagonal
@@ -65,11 +81,11 @@ class APSBuilder(DeformableModelBuilder):
                                     self.downscale, self.features,
                                     verbose=verbose)
 
-        # if graph not provided, compute the MST
-        shapes = [i.landmarks[group][label] for i in normalized_images]
-        if self.tree_is_mst:
-            self.tree = _compute_minimum_spanning_tree(shapes, self.root_vertex,
-                                                       '- ', verbose)
+        # if graph_deformation not provided, compute the MST
+        if self.graph_deformation is None:
+            shapes = [i.landmarks[group][label] for i in normalized_images]
+            self.graph_deformation = _compute_minimum_spanning_tree(
+                shapes, self.root_vertex, '- ', verbose)
 
         # build the model at each pyramid level
         if verbose:
@@ -131,11 +147,11 @@ class APSBuilder(DeformableModelBuilder):
 
             # compute relative locations from all shapes
             relative_locations = _get_relative_locations(
-                train_shapes, self.tree, level_str, verbose)
+                train_shapes, self.graph_deformation, level_str, verbose)
 
             # build and add deformation model to the list
             deformation_models.append(_build_deformation_model(
-                self.tree, relative_locations, level_str, verbose))
+                self.graph_deformation, relative_locations, level_str, verbose))
 
             # extract patches from all images
             all_patches = _warp_images(feature_images, group, label,
@@ -145,12 +161,23 @@ class APSBuilder(DeformableModelBuilder):
 
             # build and add appearance model to the list
             if self.gaussian_per_patch:
-                n_points = images[0].landmarks[group][label].n_points
                 n_channels = feature_images[0].n_channels
-                appearance_models.append(_build_appearance_model_per_patch(
-                    all_patches, n_points, self.patch_shape, n_channels,
-                    self.n_appearance_parameters[rj], level_str, verbose))
+                if self.graph_appearance is None:
+                    # diagonal block covariance
+                    n_points = images[0].landmarks[group][label].n_points
+                    appearance_models.append(
+                        _build_appearance_model_block_diagonal(
+                            all_patches, n_points, self.patch_shape, n_channels,
+                            self.n_appearance_parameters[rj], level_str,
+                            verbose))
+                else:
+                    # sparse block covariance
+                    appearance_models.append(_build_appearance_model_sparse(
+                        all_patches, self.graph_appearance, self.patch_shape,
+                        n_channels, self.n_appearance_parameters[rj], level_str,
+                        verbose))
             else:
+                # full covariance
                 appearance_models.append(_build_appearance_model_full(
                     all_patches, self.n_appearance_parameters[rj],
                     level_str, verbose))
@@ -174,8 +201,9 @@ class APSBuilder(DeformableModelBuilder):
         """
         from .base import APS
         return APS(shape_models, deformation_models, appearance_models,
-                   n_training_images, self.tree, self.patch_shape,
-                   self.features, self.reference_shape, self.downscale,
+                   n_training_images, self.graph_appearance,
+                   self.graph_deformation, self.patch_shape, self.features,
+                   self.reference_shape, self.downscale,
                    self.scaled_shape_models, self.use_procrustes)
 
 
@@ -218,26 +246,29 @@ def _warp_images(images, group, label, patch_shape, as_vectors, level_str,
     return all_patches
 
 
-def _get_relative_locations(shapes, tree, level_str, verbose):
+def _get_relative_locations(shapes, graph, level_str, verbose):
     r"""
     returns numpy.array of size 2 x n_images x n_edges
     """
-    # convert given shapes to point trees
-    point_trees = [PointTree(shape.points, tree.adjacency_array,
-                             tree.root_vertex)
-                   for shape in shapes]
+    # convert given shapes to point graphs
+    if isinstance(graph, Tree):
+        point_graphs = [PointTree(shape.points, graph.adjacency_array,
+                                  graph.root_vertex) for shape in shapes]
+    else:
+        point_graphs = [PointDirectedGraph(shape.points, graph.adjacency_array)
+                        for shape in shapes]
 
     # initialize an output numpy array
-    rel_loc_array = np.empty((2, tree.n_edges, len(point_trees)))
+    rel_loc_array = np.empty((2, graph.n_edges, len(point_graphs)))
 
     # get relative locations
-    for c, pt in enumerate(point_trees):
+    for c, pt in enumerate(point_graphs):
         # print progress
         if verbose:
             print_dynamic('{}Computing relative locations from '
                           'shapes - {}'.format(
                           level_str,
-                          progress_bar_str(float(c + 1) / len(point_trees),
+                          progress_bar_str(float(c + 1) / len(point_graphs),
                                            show_bar=False)))
 
         # get relative locations from this shape
@@ -302,25 +333,25 @@ def _compute_minimum_spanning_tree(shapes, root_vertex, level_str, verbose):
     return complete_graph.minimum_spanning_tree(weights, root_vertex)
 
 
-def _build_deformation_model(tree, relative_locations, level_str, verbose):
+def _build_deformation_model(graph, relative_locations, level_str, verbose):
     # build deformation model
     if verbose:
         print_dynamic('{}Training deformation distribution per '
                       'graph edge'.format(level_str))
-    def_len = 2 * tree.n_vertices
+    def_len = 2 * graph.n_vertices
     def_cov = np.zeros((def_len, def_len))
-    for e in range(tree.n_edges):
+    for e in range(graph.n_edges):
         # print progress
         if verbose:
             print_dynamic('{}Training deformation distribution '
                           'per edge - {}'.format(
                           level_str,
-                          progress_bar_str(float(e + 1) / tree.n_edges,
+                          progress_bar_str(float(e + 1) / graph.n_edges,
                                            show_bar=False)))
 
         # get vertices adjacent to edge
-        parent = tree.adjacency_array[e, 0]
-        child = tree.adjacency_array[e, 1]
+        parent = graph.adjacency_array[e, 0]
+        child = graph.adjacency_array[e, 1]
 
         # compute covariance matrix
         edge_cov = np.linalg.inv(np.cov(relative_locations[..., e]))
@@ -362,13 +393,26 @@ def _build_deformation_model(tree, relative_locations, level_str, verbose):
     return def_cov
 
 
-def _build_appearance_model_per_patch(all_patches_array, n_points, patch_shape,
-                                      n_channels, n_appearance_parameters,
-                                      level_str, verbose):
+def _covariance_matrix_inverse(cov_mat, n_appearance_parameters):
+    if n_appearance_parameters is None:
+        return np.linalg.inv(cov_mat)
+    else:
+        s, v, d = np.linalg.svd(cov_mat)
+        s = s[:, :n_appearance_parameters]
+        v = v[:n_appearance_parameters]
+        d = d[:n_appearance_parameters, :]
+        return s.dot(np.diag(1/v)).dot(d)
+
+
+def _build_appearance_model_block_diagonal(all_patches_array, n_points,
+                                           patch_shape, n_channels,
+                                           n_appearance_parameters, level_str,
+                                           verbose):
     # build appearance model
     if verbose:
         print_dynamic('{}Training appearance distribution per '
                       'patch'.format(level_str))
+
     # compute mean appearance vector
     app_mean = np.mean(all_patches_array, axis=-1)
 
@@ -391,19 +435,81 @@ def _build_appearance_model_per_patch(all_patches_array, n_points, patch_shape,
         # select patches and vectorize
         patches_vector = all_patches_array[e, ...].reshape(-1, n_images)
 
-        # compute and store covariance
+        # compute covariance
         cov_mat = np.cov(patches_vector)
-        if n_appearance_parameters is None:
-            all_cov.append(np.linalg.inv(cov_mat))
-        else:
-            s, v, d = np.linalg.svd(cov_mat)
-            s = s[:, :n_appearance_parameters]
-            v = v[:n_appearance_parameters]
-            d = d[:n_appearance_parameters, :]
-            all_cov.append(s.dot(np.diag(1/v)).dot(d))
+
+        # compute covariance inverse
+        inv_cov_mat = _covariance_matrix_inverse(cov_mat, n_appearance_parameters)
+
+        # store covariance
+        all_cov.append(cov_inv_cov_mat)
 
     # create final sparse covariance matrix
     return app_mean, block_diag(all_cov).tocsr()
+
+
+def _build_appearance_model_sparse(all_patches_array, graph, patch_shape,
+                                   n_channels, n_appearance_parameters,
+                                   level_str, verbose):
+    # build appearance model
+    if verbose:
+        print_dynamic('{}Training appearance distribution per '
+                      'edge'.format(level_str))
+
+    # compute mean appearance vector
+    app_mean = np.mean(all_patches_array, axis=-1)
+
+    # number of images
+    n_images = all_patches_array.shape[-1]
+
+    # appearance vector and patch vector lengths
+    patch_len = np.prod(patch_shape) * n_channels
+
+    # initialize block sparse covariance matrix
+    all_cov = lil_matrix((graph.n_vertices * patch_len,
+                          graph.n_vertices * patch_len))
+
+    # compute covariance matrix for each edge
+    for e in range(graph.n_edges):
+        # print progress
+        if verbose:
+            print_dynamic('{}Training appearance distribution '
+                          'per edge - {}'.format(
+                          level_str,
+                          progress_bar_str(float(e + 1) / graph.n_edges,
+                                           show_bar=False)))
+
+        # edge vertices
+        v1 = np.min(graph.adjacency_array[e, :])
+        v2 = np.max(graph.adjacency_array[e, :])
+
+        # find indices in target covariance matrix
+        v1_from = v1 * patch_len
+        v1_to = (v1 + 1) * patch_len
+        v2_from = v2 * patch_len
+        v2_to = (v2 + 1) * patch_len
+
+        # extract data
+        edge_data = np.concatenate((all_patches_array[v1, ...].reshape(-1, n_images),
+                                    all_patches_array[v2, ...].reshape(-1, n_images)))
+
+        # compute covariance inverse
+        icov = _covariance_matrix_inverse(np.cov(edge_data),
+                                          n_appearance_parameters)
+
+        # v1, v2
+        all_cov[v1_from:v1_to, v2_from:v2_to] += icov[:patch_len, patch_len::]
+
+        # v2, v1
+        all_cov[v2_from:v2_to, v1_from:v1_to] += icov[patch_len::, :patch_len]
+
+        # v1, v1
+        all_cov[v1_from:v1_to, v1_from:v1_to] += icov[:patch_len, :patch_len]
+
+        # v2, v2
+        all_cov[v2_from:v2_to, v2_from:v2_to] += icov[patch_len::, patch_len::]
+
+    return app_mean, all_cov.tocsr()
 
 
 def _build_appearance_model_full(all_patches, n_appearance_parameters,
