@@ -3,22 +3,23 @@ import numpy as np
 
 from serializablecallable import SerializableCallable
 from menpofit.base import DeformableModel
-from menpo.shape import PointTree
+from menpo.shape import PointTree, PointDirectedGraph, Tree
 
 
 class APS(DeformableModel):
     """
     """
     def __init__(self, shape_models, deformation_models, appearance_models,
-                 n_training_images, tree, patch_shape, features,
-                 reference_shape, downscale, scaled_shape_models,
-                 use_procrustes):
+                 n_training_images, graph_appearance, graph_deformation,
+                 patch_shape, features, reference_shape, downscale,
+                 scaled_shape_models, use_procrustes):
         DeformableModel.__init__(self, features)
         self.n_training_images = n_training_images
         self.shape_models = shape_models
         self.deformation_models = deformation_models
         self.appearance_models = appearance_models
-        self.tree = tree
+        self.graph_appearance = graph_appearance
+        self.graph_deformation = graph_deformation
         self.patch_shape = patch_shape
         self.reference_shape = reference_shape
         self.downscale = downscale
@@ -52,37 +53,47 @@ class APS(DeformableModel):
         """
         return len(self.shape_models)
 
-    def instance(self, shape_weights=None, level=-1, as_tree=False):
+    def instance(self, shape_weights=None, level=-1, as_graph=False):
         r"""
         """
         sm = self.shape_models[level]
 
-        # TODO: this bit of logic should to be transferred down to PCAModel
         if shape_weights is None:
             shape_weights = [0]
         n_shape_weights = len(shape_weights)
         shape_weights *= sm.eigenvalues[:n_shape_weights] ** 0.5
         shape_instance = sm.instance(shape_weights)
-        if as_tree:
-            shape_instance = PointTree(shape_instance.points,
-                                       self.tree.adjacency_array,
-                                       self.tree.root_vertex)
+        if as_graph:
+            if isinstance(self.graph_deformation, Tree):
+                shape_instance = PointTree(
+                    shape_instance.points,
+                    self.graph_deformation.adjacency_array,
+                    self.graph_deformation.root_vertex)
+            else:
+                shape_instance = PointDirectedGraph(
+                    shape_instance.points,
+                    self.graph_deformation.adjacency_array)
 
         return shape_instance
 
-    def random_instance(self, level=-1, as_tree=False):
+    def random_instance(self, level=-1, as_graph=False):
         r"""
         """
         sm = self.shape_models[level]
 
-        # TODO: this bit of logic should to be transferred down to PCAModel
         shape_weights = (np.random.randn(sm.n_active_components) *
                          sm.eigenvalues[:sm.n_active_components]**0.5)
         shape_instance = sm.instance(shape_weights)
-        if as_tree:
-            shape_instance = PointTree(shape_instance.points,
-                                       self.tree.adjacency_array,
-                                       self.tree.root_vertex)
+        if as_graph:
+            if isinstance(self.graph_deformation, Tree):
+                shape_instance = PointTree(
+                    shape_instance.points,
+                    self.graph_deformation.adjacency_array,
+                    self.graph_deformation.root_vertex)
+            else:
+                shape_instance = PointDirectedGraph(
+                    shape_instance.points,
+                    self.graph_deformation.adjacency_array)
 
         return shape_instance
 
