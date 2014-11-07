@@ -436,10 +436,11 @@ def _build_appearance_model_block_diagonal(all_patches_array, n_points,
         cov_mat = np.cov(all_patches_array[i_from:i_to, :])
 
         # compute covariance inverse
-        inv_cov_mat = _covariance_matrix_inverse(cov_mat, n_appearance_parameters)
+        inv_cov_mat = _covariance_matrix_inverse(cov_mat,
+                                                 n_appearance_parameters)
 
         # store covariance
-        all_cov.append(cov_inv_cov_mat)
+        all_cov.append(inv_cov_mat)
 
     # create final sparse covariance matrix
     return app_mean, block_diag(all_cov).tocsr()
