@@ -190,8 +190,8 @@ class APSBuilder(DeformableModelBuilder):
             else:
                 # full covariance
                 appearance_models.append(_build_appearance_model_full(
-                    all_patches, self.n_appearance_parameters[rj],
-                    level_str, verbose))
+                    all_patches, self.n_appearance_parameters[rj], group, label,
+                    self.patch_shape, level_str, verbose))
 
             if verbose:
                 print_dynamic('{}Done\n'.format(level_str))
@@ -364,10 +364,19 @@ def _build_appearance_model_sparse(all_patches_array, graph, patch_shape,
 
 
 def _build_appearance_model_full(all_patches, n_appearance_parameters,
-                                 level_str, verbose):
+                                 group, label, patch_shape, level_str, verbose):
     # build appearance model
     if verbose:
         print_dynamic('{}Training appearance distribution'.format(level_str))
+
+    # get mean appearance vector
+    n_points = all_patches[0].landmarks[group][label].n_points
+    patches_image_shape = (n_points, 1, all_patches[0].n_channels) + patch_shape
+    n_images = len(all_patches)
+    tmp = np.empty(patches_image_shape + (n_images,))
+    for c, i in enumerate(all_patches):
+        tmp[..., c] = i.pixels
+    app_mean = np.mean(tmp, axis=-1)
 
     # apply pca
     appearance_model = PCAModel(all_patches)
@@ -375,10 +384,6 @@ def _build_appearance_model_full(all_patches, n_appearance_parameters,
     # trim components
     if n_appearance_parameters is not None:
         appearance_model.trim_components(n_appearance_parameters)
-
-    # get mean appearance vector
-    #app_mean = appearance_model.mean().as_vector()
-    app_mean = np.mean(all_patches, axis=-1)
 
     # compute covariance matrix
     app_cov = appearance_model.components.T.dot(np.diag(1/appearance_model.eigenvalues)).dot(appearance_model.components)
