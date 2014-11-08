@@ -72,17 +72,9 @@ def parse_appearance_graph(graph_type):
             adjacency_array[i, 1] = i
         gaussian_per_patch = True
     elif graph_type == 'full_graph_68':
-        kk = 67*67 - sum(range(67))
-        adjacency_array = np.empty((kk, 2), dtype=np.int)
-        e = -1
-        for i in range(67):
-            k = i+1
-            for j in range(k, 68, 1):
-                e += 1
-                adjacency_array[e, 0] = i
-                adjacency_array[e, 1] = j
+        adjacency_array = np.array(_get_complete_graph_edges(range(68)))
         gaussian_per_patch = True
-    elif graph_type == 'per_facial_area':
+    elif graph_type == 'chain_per_area':
         # FULL COV FOR EACH FACIAL AREA
         jaw = np.empty((16, 2), dtype=np.int)
         for i in range(16):
@@ -108,6 +100,34 @@ def parse_appearance_graph(graph_type):
         adjacency_array = np.concatenate((adjacency_array, leye))
         adjacency_array = np.concatenate((adjacency_array, mouth))
         adjacency_array = np.concatenate((adjacency_array, mouth2))
+        gaussian_per_patch = True
+    elif graph_type == 'joan_graph':
+        # define full for eyes and mouth
+        reye = _get_complete_graph_edges(range(36, 42))
+        leye = _get_complete_graph_edges(range(42, 48))
+        mouth = _get_complete_graph_edges(range(48, 68))
+        rbrow = _get_chain_graph_edges(range(17, 22))
+        lbrow = _get_chain_graph_edges(range(22, 27))
+        jaw = _get_chain_graph_edges(range(0, 17))
+        nose = (_get_chain_graph_edges([27, 28, 29, 30, 33]) +
+                _get_chain_graph_edges([31, 32, 33, 34, 35]))
+        edges = (jaw + [[36, 0], [17, 0], [45, 16], [26, 16]] + rbrow + lbrow +
+                 [[19, 37], [24, 44]] + reye + leye + [[27, 39], [27, 42]] +
+                 nose + mouth + [[8, 57], [8, 66], [33, 51], [33, 62]])
+        adjacency_array = np.array(edges)
+        gaussian_per_patch = True
+    elif graph_type == 'complete_and_chain_per_area':
+        # define full for eyes and mouth
+        jaw = _get_chain_graph_edges(range(0, 17))
+        rbrow = _get_chain_graph_edges(range(17, 22))
+        lbrow = _get_chain_graph_edges(range(22, 27))
+        nose = (_get_chain_graph_edges([27, 28, 29, 30, 33]) +
+                _get_chain_graph_edges([31, 32, 33, 34, 35]))
+        reye = _get_complete_graph_edges(range(36, 42))
+        leye = _get_complete_graph_edges(range(42, 48))
+        mouth = _get_complete_graph_edges(range(48, 68))
+        adjacency_array = np.array(jaw + rbrow + lbrow + nose + reye + leye +
+                                   mouth)
         gaussian_per_patch = True
     elif graph_type == 'mst_68':
         # MST 68
@@ -161,3 +181,26 @@ def parse_appearance_graph(graph_type):
     else:
         raise ValueError('Invalid graph_appearance str provided')
     return adjacency_array, gaussian_per_patch
+
+
+def _get_complete_graph_edges(vertices_list):
+    n_vertices = len(vertices_list)
+    edges = []
+    for i in range(n_vertices-1):
+        k = i + 1
+        for j in range(k, n_vertices, 1):
+            v1 = vertices_list[i]
+            v2 = vertices_list[j]
+            edges.append([v1, v2])
+    return edges
+
+
+def _get_chain_graph_edges(vertices_list):
+    n_vertices = len(vertices_list)
+    edges = []
+    for i in range(n_vertices-1):
+        k = i + 1
+        v1 = vertices_list[i]
+        v2 = vertices_list[k]
+        edges.append([v1, v2])
+    return edges

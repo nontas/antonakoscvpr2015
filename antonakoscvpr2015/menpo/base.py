@@ -10,14 +10,15 @@ class APS(DeformableModel):
     """
     """
     def __init__(self, shape_models, deformation_models, appearance_models,
-                 n_training_images, graph_appearance, graph_deformation,
-                 patch_shape, features, reference_shape, downscale,
-                 scaled_shape_models, use_procrustes):
+                 n_training_images, graph_shape, graph_appearance,
+                 graph_deformation, patch_shape, features, reference_shape,
+                 downscale, scaled_shape_models, use_procrustes):
         DeformableModel.__init__(self, features)
         self.n_training_images = n_training_images
         self.shape_models = shape_models
         self.deformation_models = deformation_models
         self.appearance_models = appearance_models
+        self.graph_shape = graph_shape
         self.graph_appearance = graph_appearance
         self.graph_deformation = graph_deformation
         self.patch_shape = patch_shape

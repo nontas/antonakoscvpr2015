@@ -68,19 +68,24 @@ def train_aps(experiments_path, fast, group, training_images_options,
     adj, fl = parse_appearance_graph(training_options['graph_appearance'])
     training_options['adjacency_array_appearance'] = adj
     training_options['gaussian_per_patch'] = fl
+    adj, _ = parse_appearance_graph(training_options['graph_shape'])
+    training_options['adjacency_array_shape'] = adj
     training_options['features'] = parse_features(training_options['features'],
                                                   fast)
     graph_deformation_str = training_options['graph_deformation']
     graph_appearance_str = training_options['graph_appearance']
+    graph_shape_str = training_options['graph_shape']
     del training_options['graph_deformation']
     del training_options['graph_appearance']
+    del training_options['graph_shape']
 
     # Load training images
     training_images = load_database(**training_images_options)
 
     # make model filename
     filename = model_filename(training_images_options, training_options, group,
-                              fast, graph_deformation_str, graph_appearance_str)
+                              fast, graph_deformation_str, graph_appearance_str,
+                              graph_shape_str)
     save_path = os.path.join(experiments_path, 'Models', filename)
 
     # train model
@@ -247,7 +252,8 @@ def parse_algorithm(fast, algorithm):
 
 
 def model_filename(training_images_options, training_options, group, fast,
-                   graph_deformation_str, graph_appearance_str):
+                   graph_deformation_str, graph_appearance_str,
+                   graph_shape_str):
     filename = training_images_options['db_name']
     if group is not None:
         filename += '_' + group.__name__
@@ -256,6 +262,7 @@ def model_filename(training_images_options, training_options, group, fast,
     filename += '_' + training_options['features'].__name__ + \
                 '_def-' + graph_deformation_str + \
                 '_app-' + graph_appearance_str + \
+                '_sha-' + graph_shape_str + \
                 '_patch' + str(training_options['patch_shape'][0]) + \
                 '_norm' + str(training_options['normalization_diagonal']) + \
                 '_lev' + str(training_options['n_levels']) + \

@@ -5,6 +5,7 @@ from scipy.sparse.linalg import eigsh
 
 from menpo.visualize import print_dynamic, progress_bar_str
 from menpo.model.pca import PCAModel
+from menpo.math.decomposition import eigenvalue_decomposition
 
 
 class SparsePCAModel(PCAModel):
@@ -51,41 +52,6 @@ class SparsePCAModel(PCAModel):
             ' - components shape:     {}\n'.format(
             self.n_components, self.components.shape)
         return str_out
-
-
-def eigenvalue_decomposition(S, eps=10**-10):
-    r"""
-
-    Parameters
-    ----------
-    S : (N, N)  ndarray
-        Covariance/Scatter matrix
-
-    Returns
-    -------
-    pos_eigenvectors: (N, p) ndarray
-    pos_eigenvalues: (p,) ndarray
-    """
-    # compute eigenvalue decomposition
-    eigenvalues, eigenvectors = eigsh(S)
-    # sort eigenvalues from largest to smallest
-    index = np.argsort(eigenvalues)[::-1]
-    eigenvalues = eigenvalues[index]
-    eigenvectors = eigenvectors[:, index]
-
-    # set tolerance limit
-    limit = np.max(np.abs(eigenvalues)) * eps
-
-    # select positive eigenvalues
-    pos_index = eigenvalues > 0.0
-    pos_eigenvalues = eigenvalues[pos_index]
-    pos_eigenvectors = eigenvectors[:, pos_index]
-    # check they are within the expected tolerance
-    index = pos_eigenvalues > limit
-    pos_eigenvalues = pos_eigenvalues[index]
-    pos_eigenvectors = pos_eigenvectors[:, index]
-
-    return pos_eigenvectors, pos_eigenvalues
 
 
 def principal_component_decomposition_sparse(X, adjacency_array, patch_len,
@@ -179,7 +145,7 @@ def compute_sparse_covariance(X, adjacency_array, patch_len, level_str,
     n_edges = adjacency_array.shape[0]
 
     # initialize block sparse covariance matrix
-    all_cov = lil_matrix((n_features, n_features))
+    all_cov = np.zeros((n_features, n_features))
 
     # compute covariance matrix for each edge
     for e in range(n_edges):
@@ -204,7 +170,7 @@ def compute_sparse_covariance(X, adjacency_array, patch_len, level_str,
         edge_data = np.concatenate((X[v1_from:v1_to, :], X[v2_from:v2_to, :]))
 
         # compute covariance inverse
-        icov = np.cov(edge_data)
+        icov = np.linalg.inv(np.cov(edge_data))
 
         # v1, v2
         all_cov[v1_from:v1_to, v2_from:v2_to] += icov[:patch_len, patch_len::]
@@ -218,4 +184,4 @@ def compute_sparse_covariance(X, adjacency_array, patch_len, level_str,
         # v2, v2
         all_cov[v2_from:v2_to, v2_from:v2_to] += icov[patch_len::, patch_len::]
 
-    return all_cov.tocsr()
+    return np.linalg.inv(all_cov)
