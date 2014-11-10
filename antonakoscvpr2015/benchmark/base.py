@@ -156,6 +156,7 @@ def fit_aps(aps, modelfilename, experiments_path, fast, group,
         if verbose:
             perc1 = 0.
             perc2 = 0.
+            perc3 = 0.
         for j, i in enumerate(fitting_images):
             # fit
             if group is not None:
@@ -176,16 +177,21 @@ def fit_aps(aps, modelfilename, experiments_path, fast, group,
                     perc1 += 1.
                 if final_error <= 0.04:
                     perc2 += 1.
-                print_dynamic('- {0} - [<=0.03: {1:.1f}%, <=0.04: {2:.1f}%] - '
-                              'Image {3}/{4} (error: {5:.3f} --> {6:.3f})'.format(
+                if final_error <= 0.05:
+                    perc3 += 1.
+                print_dynamic('- {0} - [<=0.03: {1:.1f}%, <=0.04: {2:.1f}%, '
+                              '<=0.05: {3:.1f}%] - Image {4}/{5} (error: '
+                              '{6:.3f} --> {7:.3f})'.format(
                               progress_bar_str(float(j + 1.) / n_images,
                                                show_bar=False),
                               perc1 * 100. / n_images, perc2 * 100. / n_images,
-                              j + 1, n_images, initial_error, final_error))
+                              perc3 * 100. / n_images, j + 1, n_images,
+                              initial_error, final_error))
         if verbose:
             print_dynamic('- Fitting completed: [<=0.03: {0:.1f}%, <=0.04: '
-                          '{1:.1f}%]\n'.format(perc1 * 100. / n_images,
-                                               perc2 * 100. / n_images))
+                          '{1:.1f}%, <=0.05: {2:.1f}%]\n'.format(
+                          perc1 * 100. / n_images, perc2 * 100. / n_images,
+                          perc3 * 100. / n_images))
 
         errors = []
         errors.append([fr.final_error() for fr in fitting_results])

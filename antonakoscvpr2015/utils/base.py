@@ -338,4 +338,6 @@ def _check_n_parameters(n_params, n_levels, n_params_str):
             raise ValueError('{} can be an integer or a float or None '
                              'or a list containing 1 or {} of '
                              'those'.format(n_params_str, n_levels))
+    else:
+        n_params = [n_params] * n_levels
     return n_params

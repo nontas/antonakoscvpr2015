@@ -46,6 +46,8 @@ class APSBuilder(DeformableModelBuilder):
         # appearance graph
         if adjacency_array_appearance is None:
             self.graph_appearance = None
+        elif adjacency_array_appearance == 'yorgos':
+            self.graph_appearance = 'yorgos'
         else:
             self.graph_appearance = UndirectedGraph(adjacency_array_appearance)
 
@@ -188,10 +190,22 @@ class APSBuilder(DeformableModelBuilder):
                         n_channels, self.n_appearance_parameters[rj], level_str,
                         verbose))
             else:
-                # full covariance
-                appearance_models.append(_build_appearance_model_full(
-                    all_patches, self.n_appearance_parameters[rj],
-                    level_str, verbose))
+                if self.graph_appearance is None:
+                    # full covariance
+                    n_points = images[0].landmarks[group][label].n_points
+                    patches_len = np.prod(self.patch_shape) * \
+                                  images[0].n_channels * n_points
+                    appearance_models.append(_build_appearance_model_full(
+                        all_patches, self.n_appearance_parameters[rj],
+                        patches_len, level_str, verbose))
+                elif self.graph_appearance == 'yorgos':
+                    # full covariance
+                    n_points = images[0].landmarks[group][label].n_points
+                    patches_len = np.prod(self.patch_shape) * \
+                                  images[0].n_channels * n_points
+                    appearance_models.append(_build_appearance_model_full_yorgos(
+                        all_patches, self.n_appearance_parameters[rj],
+                        patches_len, level_str, verbose))
 
             if verbose:
                 print_dynamic('{}Done\n'.format(level_str))
@@ -361,10 +375,17 @@ def _build_appearance_model_sparse(all_patches_array, graph, patch_shape,
 
 
 def _build_appearance_model_full(all_patches, n_appearance_parameters,
-                                 level_str, verbose):
+                                 patches_len, level_str, verbose):
     # build appearance model
     if verbose:
         print_dynamic('{}Training appearance distribution'.format(level_str))
+
+    # get mean appearance vector
+    n_images = len(all_patches)
+    tmp = np.empty((patches_len, n_images))
+    for c, i in enumerate(all_patches):
+        tmp[..., c] = vectorize_patches_image(i)
+    app_mean = np.mean(tmp, axis=1)
 
     # apply pca
     appearance_model = PCAModel(all_patches)
@@ -373,11 +394,33 @@ def _build_appearance_model_full(all_patches, n_appearance_parameters,
     if n_appearance_parameters is not None:
         appearance_model.trim_components(n_appearance_parameters)
 
-    # get mean appearance vector
-    app_mean = appearance_model.mean().as_vector()
-
     # compute covariance matrix
     app_cov = appearance_model.components.T.dot(np.diag(1/appearance_model.eigenvalues)).dot(appearance_model.components)
 
     return app_mean, app_cov
 
+
+def _build_appearance_model_full_yorgos(all_patches, n_appearance_parameters,
+                                        patches_len, level_str, verbose):
+    # build appearance model
+    if verbose:
+        print_dynamic('{}Training appearance distribution'.format(level_str))
+
+    # get mean appearance vector
+    n_images = len(all_patches)
+    tmp = np.empty((patches_len, n_images))
+    for c, i in enumerate(all_patches):
+        tmp[..., c] = vectorize_patches_image(i)
+    app_mean = np.mean(tmp, axis=1)
+
+    # apply pca
+    appearance_model = PCAModel(all_patches)
+
+    # trim components
+    if n_appearance_parameters is not None:
+        appearance_model.trim_components(n_appearance_parameters)
+
+    # compute covariance matrix
+    app_cov = np.eye(appearance_model.n_features, appearance_model.n_features) - appearance_model.components.T.dot(appearance_model.components)
+
+    return app_mean, app_cov
